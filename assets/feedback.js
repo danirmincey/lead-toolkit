@@ -30,15 +30,18 @@
   var CFG = {
     // Google Form "formResponse" URL, e.g.
     // 'https://docs.google.com/forms/d/e/1FAIpQL.../formResponse'
-    formUrl: '',
+    formUrl: 'https://docs.google.com/forms/d/e/1FAIpQLSfJp7VqMAsteQMp0-PDk0x82C2-3MtKuVUWbx0lRR_3gHECyg/formResponse',
     // entry IDs from the Form's prefilled link, e.g. { name: 'entry.111', ... }
     entries: {
-      uni: '', name: '', faculty: '', type: '',
-      message: '', appCode: '', version: '', claimId: '', rev: ''
+      uni: 'entry.1315631799', name: 'entry.1126513135',
+      faculty: 'entry.85740736', type: 'entry.239078762',
+      message: 'entry.580942715', appCode: 'entry.1723847518',
+      version: 'entry.1828593246', claimId: 'entry.1547728497',
+      rev: 'entry.132889851'
     },
     // The linked Sheet, File > Share > Publish to web > CSV, e.g.
     // 'https://docs.google.com/spreadsheets/d/e/2PACX.../pub?output=csv'
-    csvUrl: ''
+    csvUrl: 'https://docs.google.com/spreadsheets/d/e/2PACX-1vRI7bpRZZmBfvIWTFwSHm3_tW74esm8CicwH8siS7xSis_fTEqUYAzWWOZAfpAfKVGIX-0iI-CCp8PN/pub?gid=427251498&single=true&output=csv'
   };
 
   var FACULTY = ['Rebecca Ponce de Leon', 'Modupe Akinola', 'Michael Morris', 'Ashli Carter', 'Adam Galinsky'];
@@ -96,8 +99,8 @@
 
   function submitRow(row, cb) {
     // row: {name, faculty, type, message, appCode, version, claimId, rev}
-    if (!CFG.formUrl) {
-      cb(true, 'saved on this device; the shared form is not connected yet');
+    if (!CFG.formUrl || !CFG.entries.message) {   // never POST blank rows
+      cb(true, 'saved on this device; the shared form is not fully connected yet');
       return;
     }
     var fd = new FormData();
