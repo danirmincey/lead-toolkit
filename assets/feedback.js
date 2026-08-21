@@ -58,6 +58,17 @@
   }
   var TYPES = ['👍 Worked great', '🎯 Adapt for my faculty', '🐛 Bug / wrong output', '🔧 Improvement', '✨ New app idea', '🧩 New functionality', '💬 Other'];
 
+  // each type LEADS the writer: shown as the message placeholder
+  var LEADINS = {
+    '👍 Worked great': 'Just reporting that this worked for you, as is, is enough information. Thank you! Add any detail you like.',
+    '🎯 Adapt for my faculty': 'Did you like this but your faculty needs something specific? Please describe in EXCRUCIATING detail how it should work for them: which faculty, which defaults, wording, rooms, slides, anything.',
+    '🐛 Bug / wrong output': 'What went wrong? Tell us what you loaded, what you expected, and what came out instead. Paste any numbers that look off.',
+    '🔧 Improvement': 'What would make this app better? Describe the change and the moment you needed it.',
+    '✨ New app idea': 'Describe the exercise or task the new app should handle: the input file, the output you need, and which class it belongs to.',
+    '🧩 New functionality': 'Which app needs the new capability, and what exactly should it do? Walk us through how you would use it.',
+    '💬 Other': 'Anything else on your mind: praise, confusion, questions, typos, all welcome.'
+  };
+
   /* ------------------- local claims (this browser) ------------------- */
 
   function loadClaims() {
@@ -205,19 +216,16 @@
       '<div class="fb-body">' +
       '  <div class="fb-row2">' +
       '    <input type="text" id="fb-uni" placeholder="your UNI (e.g. abc1234)" autocomplete="off">' +
-      '    <input type="text" id="fb-name" placeholder="your name">' +
-      '  </div>' +
-      '  <div class="fb-row2">' +
-      '    <select id="fb-fac"><option value="">your faculty…</option>' +
+      '    <select id="fb-fac"><option value="" disabled selected>Select your faculty</option>' +
       FACULTY.map(function (f) { return '<option>' + esc(f) + '</option>'; }).join('') +
       '    <option>Other / staff</option></select>' +
       '  </div>' +
       '  <div class="fb-row2">' +
-      '    <select id="fb-type">' + TYPES.map(function (t) { return '<option>' + esc(t) + '</option>'; }).join('') + '</select>' +
+      '    <select id="fb-type"><option value="" disabled selected>Select feedback type…</option>' +
+      TYPES.map(function (t) { return '<option>' + esc(t) + '</option>'; }).join('') + '</select>' +
       '    <select id="fb-scope"></select>' +
       '  </div>' +
-      '  <textarea id="fb-msg" rows="3" placeholder="what works, what broke, what to add…"></textarea>' +
-      '  <div class="fb-hint" id="fb-hint"></div>' +
+      '  <textarea id="fb-msg" rows="3" placeholder="pick a feedback type above and this box will lead you in…"></textarea>' +
       '  <div class="fb-row2">' +
       '    <button id="fb-send" class="fb-send">Send</button>' +
       '    <span class="fb-status" id="fb-status"></span>' +
@@ -233,18 +241,19 @@
     var $ = function (id) { return document.getElementById(id); };
 
     $('fb-uni').value = recall('uni');
-    $('fb-name').value = recall('name');
-    $('fb-fac').value = recall('fac') || '';
-    $('fb-uni').addEventListener('change', function () {
+    if (recall('fac')) $('fb-fac').value = recall('fac');
+    var uniTimer = null;
+    $('fb-uni').addEventListener('input', function () {
       remember('uni', $('fb-uni').value.trim().toLowerCase());
-      loadSheet(function () { renderMine(); });
+      clearTimeout(uniTimer);
+      uniTimer = setTimeout(function () { loadSheet(function () { renderMine(); }); }, 400);
     });
 
     function buildScope(selected) {
       var code = currentCode();
       var opts = [];
-      if (code) opts.push(['<option value="', esc(code), '">This app: ', esc(appName(code)), '</option>'].join(''));
-      opts.push('<option value="GENERAL">General (whole toolkit)</option>');
+      if (code) opts.push(['<option value="', esc(code), '">📍 About THIS app: ', esc(appName(code)), '</option>'].join(''));
+      opts.push('<option value="GENERAL">🌐 About the toolkit in general</option>');
       $('fb-scope').innerHTML = opts.join('');
       $('fb-scope').value = selected || code || 'GENERAL';
     }
@@ -270,13 +279,12 @@
       }).catch(function () { cb(); });
     }
 
-    function openPanel(prefillType) {
+    function openPanel() {
       placePanel();
       backdrop.style.display = '';
       panel.style.display = '';
       var code = currentCode();
       $('fb-ctx').textContent = code ? 'LEADTK_' + code + '_v' + version() : 'general';
-      if (prefillType) $('fb-type').value = prefillType;
       buildScope();
       renderMine();
       renderAll();
@@ -291,10 +299,7 @@
     }
 
     $('fb-type').addEventListener('change', function () {
-      var t = $('fb-type').value;
-      $('fb-hint').textContent =
-        t === '🎯 Adapt for my faculty' ? 'Say WHICH faculty and what needs to change (defaults, wording, rooms, slides…).'
-        : '';
+      $('fb-msg').placeholder = LEADINS[$('fb-type').value] || 'pick a feedback type above and this box will lead you in…';
     });
 
     var drag = null;
@@ -375,6 +380,7 @@
           if (!c) return;
           editing = c.claimId;
           $('fb-type').value = c.type;
+          $('fb-msg').placeholder = LEADINS[c.type] || '';
           $('fb-msg').value = c.message;
           buildScope(c.appCode || 'GENERAL');
           $('fb-status').textContent = 'editing an earlier note; Send saves a new revision';
@@ -403,12 +409,11 @@
 
     $('fb-send').addEventListener('click', function () {
       var uni = $('fb-uni').value.trim().toLowerCase();
-      var name = $('fb-name').value.trim();
       var msg = $('fb-msg').value.trim();
       if (!uni) { $('fb-status').textContent = 'add your UNI first (it is how you retrieve and edit your notes)'; return; }
+      if (!$('fb-type').value) { $('fb-status').textContent = 'pick a feedback type'; return; }
       if (!msg) { $('fb-status').textContent = 'write a note first'; return; }
       remember('uni', uni);
-      remember('name', name);
       remember('fac', $('fb-fac').value);
       var scope = $('fb-scope').value || 'GENERAL';
       var claims = loadClaims();
@@ -424,13 +429,12 @@
         c.appCode = scope;
         c.rev = (c.rev || 0) + 1;
         c.uni = uni;
-        c.name = name;
         c.faculty = $('fb-fac').value;
         row = c;
       } else {
         row = {
           claimId: newClaimId(), rev: 0,
-          uni: uni, name: name, faculty: $('fb-fac').value,
+          uni: uni, faculty: $('fb-fac').value,
           type: $('fb-type').value,
           message: msg, appCode: scope, version: version()
         };
@@ -479,7 +483,7 @@
       if (b) {
         b._leadOk = true;
         b.click();
-        setTimeout(function () { openPanel('👍 Worked great'); }, 700);
+        setTimeout(function () { openPanel(); }, 700);
       }
     });
 
