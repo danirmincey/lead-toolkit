@@ -8,11 +8,12 @@
                Dani can open, filter and edit like any spreadsheet.
      READ   -> the same Sheet, "published to the web" as CSV (CFG.csvUrl),
                so the widget can SHOW everyone's notes for the current app.
-     EDIT   -> a static site cannot see IP addresses, so "same person" =
-               same browser: your claims are remembered locally (claimId).
-               Editing submits a new row with the same claimId and rev+1;
-               the Sheet keeps full history, the widget shows the latest
-               rev per claim. Anyone can also just add another claim.
+     EDIT   -> identity is the CBS UNI you type (static sites cannot see
+               IPs; the UNI is the consistent key). Your claims live in the
+               Sheet under your UNI, so ANY device retrieves them by typing
+               it; this browser also caches them for convenience. Editing
+               submits a new row with the same claimId and rev+1; the Sheet
+               keeps history, the widget shows the latest rev per claim.
 
    Until CFG is filled in (see DEPLOY.md), submissions are saved locally
    and the widget says the shared form is not connected yet; no email.
@@ -32,7 +33,7 @@
     formUrl: '',
     // entry IDs from the Form's prefilled link, e.g. { name: 'entry.111', ... }
     entries: {
-      name: '', faculty: '', type: '',
+      uni: '', name: '', faculty: '', type: '',
       message: '', appCode: '', version: '', claimId: '', rev: ''
     },
     // The linked Sheet, File > Share > Publish to web > CSV, e.g.
@@ -130,27 +131,36 @@
     return rows;
   }
 
-  // latest rev per claimId, filtered to one app code
-  function collapseClaims(rows, headers, appCode) {
+  // ALL sheet rows -> latest rev per claimId, with uni + appCode kept
+  function sheetClaims(rows, headers) {
     var col = function (re) { return headers.findIndex(function (h) { return re.test(h); }); };
-    var iTime = col(/timestamp/i), iName = col(/name/i), iType = col(/type/i),
-        iMsg = col(/message/i), iApp = col(/app ?code/i), iClaim = col(/claim/i), iRev = col(/rev/i);
+    var iTime = col(/timestamp/i), iUni = col(/^uni/i), iName = col(/name/i),
+        iFac = col(/faculty/i), iType = col(/type/i), iMsg = col(/message/i),
+        iApp = col(/app ?code/i), iClaim = col(/claim/i), iRev = col(/rev/i);
     var best = new Map();
     rows.forEach(function (r) {
-      if (iApp === -1 || String(r[iApp]).trim() !== appCode) return;
-      var id = iClaim !== -1 ? String(r[iClaim]).trim() : Math.random().toString(36);
+      var id = iClaim !== -1 ? String(r[iClaim]).trim() : '';
+      if (!id) return;
       var rev = iRev !== -1 ? parseInt(r[iRev], 10) || 0 : 0;
       if (!best.has(id) || rev >= best.get(id).rev) {
         best.set(id, {
-          rev: rev,
+          claimId: id, rev: rev,
           time: iTime !== -1 ? r[iTime] : '',
+          uni: iUni !== -1 ? String(r[iUni]).trim().toLowerCase() : '',
           name: iName !== -1 ? r[iName] : '',
+          faculty: iFac !== -1 ? r[iFac] : '',
           type: iType !== -1 ? r[iType] : '',
-          message: iMsg !== -1 ? r[iMsg] : ''
+          message: iMsg !== -1 ? r[iMsg] : '',
+          appCode: iApp !== -1 ? String(r[iApp]).trim() : 'GENERAL'
         });
       }
     });
     return Array.from(best.values()).reverse();
+  }
+
+  // kept for tests / compatibility: one app's latest claims
+  function collapseClaims(rows, headers, appCode) {
+    return sheetClaims(rows, headers).filter(function (c) { return c.appCode === appCode; });
   }
 
   /* ------------------- UI ------------------- */
@@ -191,7 +201,10 @@
       '<button class="fb-x" id="fb-x" title="close">×</button></div>' +
       '<div class="fb-body">' +
       '  <div class="fb-row2">' +
+      '    <input type="text" id="fb-uni" placeholder="your UNI (e.g. abc1234)" autocomplete="off">' +
       '    <input type="text" id="fb-name" placeholder="your name">' +
+      '  </div>' +
+      '  <div class="fb-row2">' +
       '    <select id="fb-fac"><option value="">your faculty…</option>' +
       FACULTY.map(function (f) { return '<option>' + esc(f) + '</option>'; }).join('') +
       '    <option>Other / staff</option></select>' +
@@ -216,8 +229,13 @@
 
     var $ = function (id) { return document.getElementById(id); };
 
+    $('fb-uni').value = recall('uni');
     $('fb-name').value = recall('name');
     $('fb-fac').value = recall('fac') || '';
+    $('fb-uni').addEventListener('change', function () {
+      remember('uni', $('fb-uni').value.trim().toLowerCase());
+      loadSheet(function () { renderMine(); });
+    });
 
     function buildScope(selected) {
       var code = currentCode();
@@ -238,6 +256,17 @@
       panel.style.bottom = onTop ? 'auto' : (window.innerHeight - r.top + 10) + 'px';
     }
 
+    var sheet = { at: 0, claims: [] };
+    function loadSheet(cb) {
+      if (!CFG.csvUrl) { cb(); return; }
+      if (Date.now() - sheet.at < 30000) { cb(); return; }
+      fetch(CFG.csvUrl).then(function (r) { return r.text(); }).then(function (text) {
+        var rows = parseCsv(text);
+        if (rows.length > 1) sheet = { at: Date.now(), claims: sheetClaims(rows.slice(1), rows[0]) };
+        cb();
+      }).catch(function () { cb(); });
+    }
+
     function openPanel(prefillType) {
       placePanel();
       backdrop.style.display = '';
@@ -248,6 +277,7 @@
       buildScope();
       renderMine();
       renderAll();
+      loadSheet(function () { renderMine(); renderAll(); });
     }
     function closePanel() {
       backdrop.style.display = 'none';
@@ -294,11 +324,22 @@
     backdrop.addEventListener('click', closePanel);
     $('fb-x').addEventListener('click', closePanel);
 
-    /* my claims (this browser), grouped by app name + General */
+    /* my claims: everything under MY UNI in the Sheet, merged with this
+       browser's cache (higher rev wins), grouped by app name + General */
+    var editable = {};   // claimId -> claim object shown in the list
     function renderMine() {
       var code = currentCode();
       var box = $('fb-mine');
-      var mine = loadClaims();
+      var uni = $('fb-uni').value.trim().toLowerCase();
+      var byId = new Map();
+      sheet.claims.forEach(function (c) { if (uni && c.uni === uni) byId.set(c.claimId, c); });
+      loadClaims().forEach(function (c) {
+        var prev = byId.get(c.claimId);
+        if (!prev || (c.rev || 0) >= prev.rev) byId.set(c.claimId, c);
+      });
+      var mine = Array.from(byId.values());
+      editable = {};
+      mine.forEach(function (c) { editable[c.claimId] = c; });
       if (!mine.length) { box.innerHTML = ''; return; }
       var groups = new Map();
       mine.forEach(function (c) {
@@ -327,7 +368,7 @@
       Array.prototype.forEach.call(box.querySelectorAll('a[data-edit]'), function (a) {
         a.addEventListener('click', function (e) {
           e.preventDefault();
-          var c = loadClaims().filter(function (x) { return x.claimId === a.getAttribute('data-edit'); })[0];
+          var c = editable[a.getAttribute('data-edit')];
           if (!c) return;
           editing = c.claimId;
           $('fb-type').value = c.type;
@@ -338,34 +379,32 @@
       });
     }
 
-    /* everyone's notes: this app first, then General */
+    /* everyone's notes: this app first, then General (from the cached sheet) */
     function renderAll() {
       var box = $('fb-all');
       box.innerHTML = '';
-      if (!CFG.csvUrl) return;
       var code = currentCode();
-      fetch(CFG.csvUrl).then(function (r) { return r.text(); }).then(function (text) {
-        var rows = parseCsv(text);
-        if (rows.length < 2) return;
-        var h = '';
-        var buckets = code ? [code, 'GENERAL'] : ['GENERAL'];
-        buckets.forEach(function (k) {
-          var claims = collapseClaims(rows.slice(1), rows[0], k);
-          if (!claims.length) return;
-          h += '<div class="fb-listtitle">Everyone’s notes · ' + esc(appName(k)) + '</div>';
-          claims.slice(0, 8).forEach(function (c) {
-            h += '<div class="fb-item"><span class="fb-itemtype">' + esc(c.type) + '</span> ' +
-              esc(c.message).slice(0, 140) + ' <span class="fb-who">' + esc(c.name) + '</span></div>';
-          });
+      var h = '';
+      var buckets = code ? [code, 'GENERAL'] : ['GENERAL'];
+      buckets.forEach(function (k) {
+        var claims = sheet.claims.filter(function (c) { return c.appCode === k; });
+        if (!claims.length) return;
+        h += '<div class="fb-listtitle">Everyone’s notes · ' + esc(appName(k)) + '</div>';
+        claims.slice(0, 8).forEach(function (c) {
+          h += '<div class="fb-item"><span class="fb-itemtype">' + esc(c.type) + '</span> ' +
+            esc(c.message).slice(0, 140) + ' <span class="fb-who">' + esc(c.uni || c.name) + '</span></div>';
         });
-        box.innerHTML = h;
-      }).catch(function () { });
+      });
+      box.innerHTML = h;
     }
 
     $('fb-send').addEventListener('click', function () {
+      var uni = $('fb-uni').value.trim().toLowerCase();
       var name = $('fb-name').value.trim();
       var msg = $('fb-msg').value.trim();
+      if (!uni) { $('fb-status').textContent = 'add your UNI first (it is how you retrieve and edit your notes)'; return; }
       if (!msg) { $('fb-status').textContent = 'write a note first'; return; }
+      remember('uni', uni);
       remember('name', name);
       remember('fac', $('fb-fac').value);
       var scope = $('fb-scope').value || 'GENERAL';
@@ -373,17 +412,22 @@
       var row;
       if (editing) {
         var c = claims.filter(function (x) { return x.claimId === editing; })[0];
+        if (!c) {                    // claim came from the Sheet (another device)
+          c = editable[editing] || { claimId: editing, rev: 0 };
+          claims.push(c);
+        }
         c.type = $('fb-type').value;
         c.message = msg;
         c.appCode = scope;
         c.rev = (c.rev || 0) + 1;
+        c.uni = uni;
         c.name = name;
         c.faculty = $('fb-fac').value;
         row = c;
       } else {
         row = {
           claimId: newClaimId(), rev: 0,
-          name: name, faculty: $('fb-fac').value,
+          uni: uni, name: name, faculty: $('fb-fac').value,
           type: $('fb-type').value,
           message: msg, appCode: scope, version: version()
         };
@@ -397,7 +441,8 @@
         editing = null;
         $('fb-msg').value = '';
         renderMine();
-        setTimeout(renderAll, 1500);
+        sheet.at = 0;
+        setTimeout(function () { loadSheet(function () { renderMine(); renderAll(); }); }, 1500);
       });
     });
 
@@ -438,7 +483,8 @@
     document.addEventListener('click', function (e) {
       var b = e.target.closest('button');
       if (!b || panel.contains(b) || modal.contains(b)) return;
-      if (!/^[⬇📋]/.test(b.textContent.trim())) return;
+      var t = b.textContent.trim();
+      if (t.indexOf('⬇') !== 0 && t.indexOf('📋') !== 0) return;
       if (b._leadOk) { b._leadOk = false; return; }   // approved re-click passes
       e.preventDefault();
       e.stopPropagation();
@@ -453,6 +499,6 @@
   }
 
   if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { parseCsv: parseCsv, collapseClaims: collapseClaims, CFG: CFG };
+    module.exports = { parseCsv: parseCsv, collapseClaims: collapseClaims, sheetClaims: sheetClaims, CFG: CFG };
   }
 })();

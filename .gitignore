@@ -3,3 +3,8 @@
 
 # Internal analysis script; stays in Dropbox, not published
 FA2025 LEAD CH - DRM.R
+
+# Internal working docs; they live in Dropbox, not on the public site
+STATUS.md
+DEPLOY.md
+HANDOFF-DEPLOY.md

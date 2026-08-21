@@ -931,3 +931,6 @@ button[id$="-demo"], #wc-sample, #dm-sample, #fc-sample, #co-sample,
   font-family: var(--font-head); background: #fff; color: #666;
   border: 1px solid #C9D6E8; border-radius: 999px; padding: 8px 16px; cursor: pointer;
 }
+
+/* ---- v1.11: modal truly page-centered ---- */
+.fb-modal-card { top: auto; transform: none; margin: 0; }
