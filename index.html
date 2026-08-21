@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LEAD Toolkit</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='42' fill='%2308306B'/><circle cx='50' cy='50' r='18' fill='%230081cd'/></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <header class="site header-bar">
+    <div class="hdr-row1">
+      <div class="brand" id="brand">LEAD Toolkit<span class="ver">v1.10 · last updated <span id="lt-updated"></span></span></div>
+      <select id="hdr-fac" title="Faculty"></select>
+      <select id="hdr-sort" title="Arrange the tabs by"></select>
+      <div class="hdr-search-wrap">
+        <input id="hdr-search" type="search" placeholder="🔎 find an app" autocomplete="off">
+        <div id="search-pop" class="search-pop"></div>
+      </div>
+    </div>
+    <div class="hdr-row2">
+      <nav class="tabs" id="topnav"></nav>
+    </div>
+  </header>
+
+  <main>
+    <section id="home"></section>
+    <section id="app-root"></section>
+  </main>
+
+
+  <!-- vendor libraries (local copies, no CDN needed) -->
+  <script src="assets/vendor/wordcloud2.js"></script>
+  <script src="assets/xlsx-lite.js"></script>
+  <script src="assets/pptx-lite.js"></script>
+  <script src="assets/qr-lite.js"></script>
+  <script src="assets/sample-names.js"></script>
+  <script src="assets/feedback.js"></script>
+
+  <!-- shell first, then one script per app -->
+  <script src="assets/shell.js"></script>
+  <script src="apps/wordcloud.js"></script>
+  <script src="apps/demographics.js"></script>
+  <script src="apps/faces.js"></script>
+  <script src="apps/companies.js"></script>
+  <script src="apps/groups.js"></script>
+  <script src="apps/extractor.js"></script>
+  <script src="apps/kidney.js"></script>
+  <script src="apps/qrcode.js"></script>
+  <script src="apps/likert.js"></script>
+  <script src="apps/stress.js"></script>
+  <script src="apps/negotiation.js"></script>
+  <script src="apps/vps.js"></script>
+  <script src="apps/charts.js"></script>
+  <script src="apps/mindeyes.js"></script>
+  <script src="apps/culture.js"></script>
+  <script src="apps/socialnet.js"></script>
+  <script src="apps/pareto.js"></script>
+  <script src="apps/stanleyburke.js"></script>
+
+</body>
+</html>

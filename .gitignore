@@ -1,0 +1,5 @@
+# macOS folder metadata, never useful in the repo
+.DS_Store
+
+# Internal analysis script; stays in Dropbox, not published
+FA2025 LEAD CH - DRM.R
