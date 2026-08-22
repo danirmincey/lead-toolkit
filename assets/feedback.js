@@ -56,16 +56,16 @@
     }
     return 'LEADTK_' + code;
   }
-  var TYPES = ['👍 Worked great', '🎯 Adapt for my faculty', '🐛 Bug / wrong output', '🔧 Improvement', '✨ New app idea', '🧩 New functionality', '💬 Other'];
+  var TYPES = ['👍 Worked great', '🎯 Adapt for a specific faculty', '➕ Add a new feature for a specific faculty', '🐛 Bug', '⚠️ Incorrect output', '💡 New app idea', '💬 Other'];
 
   // each type LEADS the writer: shown as the message placeholder
   var LEADINS = {
     '👍 Worked great': 'Just reporting that this worked for you, as is, is enough information. Thank you! Add any detail you like.',
-    '🎯 Adapt for my faculty': 'Did you like this but your faculty needs something specific? Please describe in EXCRUCIATING detail how it should work for them: which faculty, which defaults, wording, rooms, slides, anything.',
-    '🐛 Bug / wrong output': 'What went wrong? Tell us what you loaded, what you expected, and what came out instead. Paste any numbers that look off.',
-    '🔧 Improvement': 'What would make this app better? Describe the change and the moment you needed it.',
-    '✨ New app idea': 'Describe the exercise or task the new app should handle: the input file, the output you need, and which class it belongs to.',
-    '🧩 New functionality': 'Which app needs the new capability, and what exactly should it do? Walk us through how you would use it.',
+    '🎯 Adapt for a specific faculty': 'Did you like this but a faculty needs something specific? Please describe in EXCRUCIATING detail how it should work for them: which faculty, which defaults, wording, rooms, slides, anything.',
+    '➕ Add a new feature for a specific faculty': 'Which faculty, which app, and what should the new feature do? Walk us through the class moment where it would be used.',
+    '🐛 Bug': 'Something broke, froze, or refused to run? Tell us what you clicked, what you loaded, and what happened (or did not).',
+    '⚠️ Incorrect output': 'The app ran but the numbers, plot, or slide look WRONG? Paste the wrong values, what they should be, and what data you loaded. This is the most valuable report of all.',
+    '💡 New app idea': 'Describe the exercise or task the new app should handle: the input file, the output you need, and which class it belongs to.',
     '💬 Other': 'Anything else on your mind: praise, confusion, questions, typos, all welcome.'
   };
 

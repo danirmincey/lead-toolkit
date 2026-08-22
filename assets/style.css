@@ -934,3 +934,6 @@ button[id$="-demo"], #wc-sample, #dm-sample, #fc-sample, #co-sample,
 
 /* ---- v1.11: modal truly page-centered ---- */
 .fb-modal-card { top: auto; transform: none; margin: 0; }
+
+/* ---- v1.15: notes lists scroll on their own; the form stays put ---- */
+.fb-lists { max-height: 32vh; overflow: auto; padding-right: 4px; }
