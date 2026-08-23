@@ -261,7 +261,7 @@
       '      </div>' +
       '    </details>' +
 
-      '    <details class="step disabled" open>' +
+      '    <details class="step disabled" open id="co-stepcos">' +
       '      <summary><span class="n">3</span> Companies & logos <span class="hint" id="co-nhint"></span></summary>' +
       '      <div class="body">' +
       '        <div class="row">' +
@@ -442,7 +442,7 @@
       $('co-clusterblock').style.display = '';
       buildFilterValues();
       rebuildCompanies();
-      ['co-step2', 'co-step3'].forEach(function (s) { $(s).classList.remove('disabled'); });
+      ['co-step2', 'co-stepcos', 'co-step3'].forEach(function (s) { $(s).classList.remove('disabled'); });
     }
 
     function buildFilterValues() {
