@@ -618,6 +618,12 @@
 
       var list = document.createElement('div');
       list.className = 'value-list';
+
+      var note = document.createElement('div');
+      note.id = 'wc-clusternote';
+      note.className = 'small-note';
+      note.style.marginTop = '4px';
+
       Array.from(uniq.keys()).sort().forEach(function (v) {
         var lab = document.createElement('label');
         var on = state.includeValues.has(v);
@@ -627,16 +633,17 @@
         lab.querySelector('input').addEventListener('change', function (e) {
           if (e.target.checked) state.includeValues.add(v); else state.includeValues.delete(v);
           lab.className = e.target.checked ? 'on' : '';
-          notice.textContent = state.includeValues.size === 0 ? 'tick your cluster(s) above to continue' : '';
+          note.textContent = state.includeValues.size === 0 ? 'tick your cluster(s) above to continue' : '';
           updateRowCount(); scheduleRender();
         });
         list.appendChild(lab);
       });
       box.appendChild(list);
+      box.appendChild(note);
 
       // show the "tick cluster" note if nothing is selected
       if (noneSelected && uniq.size > 1) {
-        notice.textContent = 'tick your cluster(s) above to continue';
+        note.textContent = 'tick your cluster(s) above to continue';
       }
 
       updateRowCount();

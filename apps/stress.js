@@ -265,7 +265,6 @@
       $('st-colrow').style.display = '';
       $('st-filtercol').innerHTML = '<option value="-1">- no filter -</option>' + opts;
       $('st-filtercol').value = String(state.filterCol);
-      $('st-filterrow').style.display = '';
       $('st-clusterblock').style.display = '';
       buildFilterValues();
 
@@ -601,7 +600,6 @@
     $('st-col').addEventListener('change', function (e) {
       state.col = +e.target.value;
       state.smsCols = [];              // manual column choice overrides the composite
-      $('st-smsnote').style.display = 'none';
       scheduleRender();
     });
     $('st-filtercol').addEventListener('change', function (e) {

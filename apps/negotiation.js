@@ -64,6 +64,29 @@
     return rows;
   }
 
+  /* colSplit: split g groups into ncols STACKS (the class-deck layout:
+     three tight columns, groups numbered DOWN each column). Remainder
+     goes to the middle column first, so 13 -> [4, 5, 4] like the deck. */
+  function colSplit(g, ncols) {
+    if (!g || g < 1) return [];
+    if (!ncols || ncols < 1) ncols = 1;
+    if (ncols > g) ncols = g;
+    var base = Math.floor(g / ncols), rem = g % ncols;
+    var out = [], i;
+    for (i = 0; i < ncols; i++) out.push(base);
+    // middle-out: middle column, then left of it, then right...
+    var order = [];
+    var mid = Math.floor((ncols - 1) / 2);
+    for (i = 0; i < ncols; i++) {
+      var off = Math.ceil(i / 2) * (i % 2 === 1 ? -1 : 1);
+      var idx = mid + off;
+      if (idx >= 0 && idx < ncols && order.indexOf(idx) === -1) order.push(idx);
+    }
+    for (i = 0; i < ncols; i++) if (order.indexOf(i) === -1) order.push(i);
+    for (i = 0; i < rem; i++) out[order[i]] += 1;
+    return out;
+  }
+
   // returns array of teams (arrays of people indices); teams 2i & 2i+1 = group i
   function allotTeams(n, seed) {
     var plan = teamPlan(n);
@@ -423,27 +446,27 @@
       if (!state.people.length) { holder.innerHTML = ''; $('ng-pool').style.display = 'none'; return; }
 
       var fs = Math.round(13 * state.textScale);
-      // centered rows of group blocks, numbered row-wise (1 2 3 4 across,
-      // then continuing); fixed header heights keep the headers level
-      var splits = rowSplit(g, GROUPS_PER_ROW);
-      var html = '';
+      // CLASS-DECK LAYOUT: three tight columns, ONE Abhas/Bussan header
+      // per column, groups stacked with no gaps, numbered DOWN each
+      // column (13 -> 1-4 | 5-9 | 10-13, exactly like the slide)
+      var splits = colSplit(g, 3);
+      var html = '<div style="display:flex;gap:14px;justify-content:center;align-items:flex-start">';
       var gi = 0;
-      for (var band = 0; band < splits.length; band++) {
-        html += '<div style="display:flex;gap:12px;justify-content:center;align-items:flex-start">';
-        for (var c = 0; c < splits[band]; c++) {
-          html += '<table class="grp" style="font-size:' + fs + 'px">';
-          html += '<tr><td style="background:' + state.colA + ';font-weight:700;font-family:var(--font-head);height:2em;min-width:96px">' + escapeHtml(state.sideA) + '</td>' +
-            '<td style="background:' + state.colB + ';font-weight:700;font-family:var(--font-head);height:2em;min-width:96px">' + escapeHtml(state.sideB) + '</td></tr>';
+      for (var col = 0; col < splits.length; col++) {
+        html += '<table class="grp" style="font-size:' + fs + 'px;flex:1;min-width:0">';
+        html += '<tr><td style="background:' + state.colA + ';font-weight:700;font-family:var(--font-head);height:2em;min-width:96px;width:50%">' + escapeHtml(state.sideA) + '</td>' +
+          '<td style="background:' + state.colB + ';font-weight:700;font-family:var(--font-head);height:2em;min-width:96px;width:50%">' + escapeHtml(state.sideB) + '</td></tr>';
+        for (var k = 0; k < splits[col]; k++) {
           html += '<tr><td colspan="2" style="background:' + state.headFill + ';color:#fff;font-weight:700;font-family:var(--font-head);height:1.8em">Group ' + (gi + 1) + '</td></tr>';
           html += '<tr>' +
             '<td class="movable" data-t="' + (2 * gi) + '" style="background:' + state.colA + ';vertical-align:top">' + (state.teams[2 * gi] || []).map(chipHtml).join('') + '</td>' +
             '<td class="movable" data-t="' + (2 * gi + 1) + '" style="background:' + state.colB + ';vertical-align:top">' + (state.teams[2 * gi + 1] || []).map(chipHtml).join('') + '</td>' +
             '</tr>';
-          html += '</table>';
           gi++;
         }
-        html += '</div>';
+        html += '</table>';
       }
+      html += '</div>';
       holder.innerHTML = html;
 
       Array.prototype.forEach.call(holder.querySelectorAll('.grp-name'), function (el) {
@@ -506,66 +529,73 @@
     function exportPptx() {
       if (!window.pptxLite || !state.teams.length) return;
       var g = state.teams.length / 2;
-      var CW = 2560, CH = 1440, margin = 60, gap = 40, vgap = 40;
-      // ~12pt on the slide: sizePx = 12 * 12700 * canvasW / 12192000 = 32 at 2560
+      // CLASS-DECK LAYOUT (the slide Dani supplied): three tight columns,
+      // ONE Abhas/Bussan header per column, navy Group banners, groups
+      // stacked with NO gaps and numbered DOWN each column. Uniform cell
+      // sizes; ~12pt names (sizePx = 12 * 12700 * canvasW / 12192000).
+      var CW = 2560, CH = 1440, margin = 80, gap = 28;
+      var cols = Math.min(3, g);
+      var splits = colSplit(g, cols);
+      var perCol = 1;
+      splits.forEach(function (k) { if (k > perCol) perCol = k; });
+
       var nameSize = 32 * state.textScale;
-      var lineH = nameSize * 1.5;
-
-      // same centered bands as the preview: rowSplit rows, numbered row-wise
-      var splits = rowSplit(g, GROUPS_PER_ROW);
-      var maxPerRow = 1;
-      splits.forEach(function (k) { if (k > maxPerRow) maxPerRow = k; });
-      var blockW = (CW - 2 * margin - (maxPerRow - 1) * gap) / maxPerRow;
-      var colW = blockW / 2;
-
-      // ONE fixed height per row kind, and one shared body height taken from
-      // the longest name list, so every header sits level across the slide
       var maxLines = 1;
       state.teams.forEach(function (t) { if (t.length > maxLines) maxLines = t.length; });
-      var sideH = nameSize * 2;
-      var headH = nameSize * 1.8;
-      var bodyH = maxLines * lineH + 18;
+      var headH = nameSize * 1.9;
+      var bannH = nameSize * 1.7;
+      var lineH = nameSize * 1.5;
+      var pad = 16;
+      var bodyH = maxLines * lineH + pad;
+
+      // shrink-to-fit: the tallest column must stay inside the slide
+      var need = headH + perCol * (bannH + bodyH);
+      var avail = CH - 2 * margin;
+      if (need > avail) {
+        var f = avail / need;
+        nameSize *= f; headH *= f; bannH *= f; lineH *= f; pad *= f;
+        bodyH = maxLines * lineH + pad;
+      }
+
+      var colW = (CW - 2 * margin - (cols - 1) * gap) / cols;
+      var cellW = colW / 2;
 
       var tables = [];
-      var gi = 0, y = margin;
-      for (var band = 0; band < splits.length; band++) {
-        var inRow = splits[band];
-        var x0 = (CW - (inRow * blockW + (inRow - 1) * gap)) / 2;
-        for (var c = 0; c < inRow; c++) {
+      var gi = 0;
+      for (var ci = 0; ci < cols; ci++) {
+        var rows = [{
+          h: headH,
+          cells: [
+            { fill: state.colA, paras: [{ runs: [{ text: state.sideA, bold: true, color: '#000000' }], sizePx: nameSize, align: 'ctr' }] },
+            { fill: state.colB, paras: [{ runs: [{ text: state.sideB, bold: true, color: '#000000' }], sizePx: nameSize, align: 'ctr' }] }
+          ]
+        }];
+        for (var k = 0; k < splits[ci]; k++) {
           var a = (state.teams[2 * gi] || []).map(personById).filter(Boolean);
           var b = (state.teams[2 * gi + 1] || []).map(personById).filter(Boolean);
-          tables.push({
-            x: x0 + c * (blockW + gap), y: y,
-            colWidths: [colW, colW],
-            border: { color: '#FFFFFF', w: 2.5 },
-            font: 'Candara',
-            rows: [
-              {
-                h: sideH,
-                cells: [
-                  { fill: state.colA, paras: [{ runs: [{ text: state.sideA, bold: true, color: '#000000' }], sizePx: nameSize, align: 'ctr' }] },
-                  { fill: state.colB, paras: [{ runs: [{ text: state.sideB, bold: true, color: '#000000' }], sizePx: nameSize, align: 'ctr' }] }
-                ]
-              },
-              {
-                h: headH,
-                cells: [
-                  { span: 2, fill: state.headFill, paras: [{ runs: [{ text: 'Group ' + (gi + 1), bold: true, color: '#FFFFFF' }], sizePx: nameSize, align: 'ctr' }] },
-                  { merged: true, fill: state.headFill, paras: [] }
-                ]
-              },
-              {
-                h: bodyH,
-                cells: [
-                  { fill: state.colA, paras: a.map(function (p) { return { runs: [{ text: p.name, color: '#000000' }], sizePx: nameSize, align: 'l' }; }) },
-                  { fill: state.colB, paras: b.map(function (p) { return { runs: [{ text: p.name, color: '#000000' }], sizePx: nameSize, align: 'l' }; }) }
-                ]
-              }
+          rows.push({
+            h: bannH,
+            cells: [
+              { span: 2, fill: state.headFill, paras: [{ runs: [{ text: 'Group ' + (gi + 1), bold: true, color: '#FFFFFF' }], sizePx: nameSize, align: 'ctr' }] },
+              { merged: true, fill: state.headFill, paras: [] }
+            ]
+          });
+          rows.push({
+            h: bodyH,
+            cells: [
+              { fill: state.colA, paras: a.map(function (p) { return { runs: [{ text: p.name, color: '#000000' }], sizePx: nameSize, align: 'l' }; }) },
+              { fill: state.colB, paras: b.map(function (p) { return { runs: [{ text: p.name, color: '#000000' }], sizePx: nameSize, align: 'l' }; }) }
             ]
           });
           gi++;
         }
-        y += sideH + headH + bodyH + vgap;
+        tables.push({
+          x: margin + ci * (colW + gap), y: margin,
+          colWidths: [cellW, cellW],
+          border: { color: '#FFFFFF', w: 2.5 },
+          font: 'Candara',
+          rows: rows
+        });
       }
 
       var bytes = window.pptxLite.makePptx({
@@ -672,6 +702,7 @@
       teamSizes: teamSizes,
       allotTeams: allotTeams,
       rowSplit: rowSplit,
+      colSplit: colSplit,
       seededShuffle: seededShuffle
     };
   }

@@ -467,8 +467,12 @@
         // half-filled husk responses (no names, no agreement, no terms)
         // must NOT become groups
         if (!namesA && !namesB && !agree && !anyTerm) return;
-        var impasse = agree === '2';
-        var terms = impasse ? { price: '', excl: '', profit: '', dispute: '', currency: '' } : {
+        // NO-DEAL rows are KEPT but carry no data: explicit impasse
+        // (agree = 2) or a submission with no names at all (unverifiable
+        // against the deal sheets, e.g. an anonymous click-through).
+        // Names and terms stay editable so the TA can repair the row.
+        var noDeal = agree === '2' || (!namesA && !namesB);
+        var terms = noDeal ? { price: '', excl: '', profit: '', dispute: '', currency: '' } : {
           price: normPrice(r[c.price]),
           excl: normExcl(r[c.excl]),
           profit: normProfit(r[c.profit]),
@@ -477,11 +481,11 @@
         };
         var g = {
           num: state.groups.length + 1,
-          abhas: namesA, bussan: namesB,
+          abhas: namesA, bussan: namesB, noDeal: noDeal,
           price: terms.price, excl: terms.excl, profit: terms.profit,
           dispute: terms.dispute, currency: terms.currency, aOut: '', bOut: ''
         };
-        var out = computeOutcome(terms, state.pay);
+        var out = noDeal ? null : computeOutcome(terms, state.pay);
         if (out) { g.aOut = String(out.a); g.bOut = String(out.b); }
         state.groups.push(g);
       });
@@ -541,7 +545,8 @@
       ];
       state.groups = ex.map(function (e, gi) {
         var g = { num: gi + 1, abhas: e[0], bussan: e[1], price: e[2], excl: e[3], profit: e[4], dispute: e[5], currency: e[6], aOut: '', bOut: '' };
-        var out = computeOutcome(g, state.pay);
+        g.noDeal = !g.price && !g.excl && !g.profit && !g.dispute && !g.currency;
+        var out = g.noDeal ? null : computeOutcome(g, state.pay);
         if (out) { g.aOut = String(out.a); g.bOut = String(out.b); }
         return g;
       });
@@ -562,8 +567,9 @@
     }
 
     function rowTone(g) {
+      if (impasseRow(g)) return '#E7E6E6';                         // no deal = grey
       var a = parseFloat(g.aOut), b = parseFloat(g.bOut);
-      if (!isFinite(a) || !isFinite(b)) return '#FFF6DC';          // impasse / incomplete
+      if (!isFinite(a) || !isFinite(b)) return '#FFF6DC';          // incomplete
       return isOptimal(a, b) ? '#EDF1F8' : '#FFE699';             // yellow = missed the frontier
     }
 
@@ -583,7 +589,7 @@
       var html = '<div class="small-note">Group numbers come from the Group Selector, NOT submission order: edit the G# boxes (or move rows with ⭡⭣) so they match the class assignment.</div>' +
         '<table><thead><tr><th>G#</th><th></th><th>Abhas</th><th>Bussan</th>' +
         '<th>Price</th><th>Excl.</th><th>Profit</th><th>Dispute</th><th>Currency</th>' +
-        '<th>Abhas out.</th><th>Bussan out.</th><th>Joint</th><th>Pareto</th><th></th></tr></thead><tbody>';
+        '<th>Abhas out.</th><th>Bussan out.</th><th>Joint</th><th>Pareto</th><th>No deal</th><th></th></tr></thead><tbody>';
       state.groups.forEach(function (g, gi) {
         if (g.num === undefined) g.num = gi + 1;
         var a = parseFloat(g.aOut), b = parseFloat(g.bOut);
@@ -604,6 +610,7 @@
           '<td><input type="number" data-g="' + gi + '" data-k="bOut" value="' + escapeHtml(g.bOut) + '" style="width:64px"></td>' +
           '<td class="pf-joint" style="font-weight:700">' + joint + '</td>' +
           '<td class="pf-opt">' + opt + '</td>' +
+          '<td style="text-align:center"><input type="checkbox" data-nd="' + gi + '"' + (impasseRow(g) ? ' checked' : '') + ' title="no deal: keep the group, plot no data"></td>' +
           '<td><button class="fixed" data-del="' + gi + '" title="remove group">×</button></td>' +
           '</tr>';
       });
@@ -613,6 +620,7 @@
         sel.addEventListener('change', function () {
           var gi = +sel.getAttribute('data-g');
           state.groups[gi][sel.getAttribute('data-k')] = sel.value;
+          if (sel.value) state.groups[gi].noDeal = false;
           recomputeRow(gi);
           refreshRow(gi);
           scheduleRender();
@@ -628,6 +636,19 @@
           }
           state.groups[gi][k] = inp.value;
           if (inp.type === 'number') refreshRow(gi);
+          scheduleRender();
+        });
+      });
+      Array.prototype.forEach.call(wrap.querySelectorAll('input[data-nd]'), function (cb) {
+        cb.addEventListener('change', function () {
+          var gi = +cb.getAttribute('data-nd');
+          var g = state.groups[gi];
+          g.noDeal = cb.checked;
+          if (g.noDeal) {
+            g.price = ''; g.excl = ''; g.profit = ''; g.dispute = ''; g.currency = '';
+            g.aOut = ''; g.bOut = '';
+          }
+          buildTable();
           scheduleRender();
         });
       });
@@ -661,6 +682,7 @@
     }
 
     function impasseRow(g) {
+      if (g.noDeal) return true;
       return !g.price && !g.excl && !g.profit && !g.dispute && !g.currency &&
         (g.abhas || g.bussan) && g.aOut === '' && g.bOut === '';
     }
@@ -805,12 +827,29 @@
         ctx.fillRect(sx(a) - 7, sy(b) - 7, 14, 14);
       });
 
+      // no-deal groups: on the plot with no data, names in grey
+      var nd = state.groups.filter(impasseRow);
+      if (nd.length) {
+        ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
+        ctx.font = '24px ' + fBody;
+        ctx.fillStyle = '#767171';
+        var ny = mT + 34;
+        ctx.fillText('No deal (no data plotted):', mL + 30, ny);
+        nd.forEach(function (g) {
+          ny += 30;
+          var who = [g.abhas, g.bussan].filter(Boolean).join(' vs ') || '(names not recorded)';
+          if (who.length > 58) who = who.slice(0, 56) + '…';
+          ctx.fillText('G' + String(g.num).padStart(2, '0') + '  ' + who, mL + 30, ny);
+        });
+      }
+
       var s = summarize(state.groups);
       renderResults(s);
       $('pf-png').disabled = false;
       $('pf-deck').disabled = false;
       $('pf-copy').disabled = false;
-      $('pf-status').textContent = s.n + ' of ' + s.total + ' groups plotted · avg ' +
+      $('pf-status').textContent = s.n + ' of ' + s.total + ' groups plotted' +
+        (nd.length ? ' · ' + nd.length + ' no deal' : '') + ' · avg ' +
         (isFinite(s.avgA) ? s.avgA.toFixed(2) : '-') + ' / ' + (isFinite(s.avgB) ? s.avgB.toFixed(2) : '-') +
         ' · reached ' + s.reached + '/' + s.total;
     }
@@ -819,7 +858,7 @@
     function renderResults(s) {
       $('pf-results').innerHTML =
         '<div class="pf-sumwrap">' +
-        '  <div class="small-note">Averages cover the ' + s.n + ' groups with a recorded deal; impasse groups count in the totals below. (The old class slide averaged 13 rows INCLUDING a since-corrected entry for the no-deal group, which is why it shows 79.00 / 80.54.)</div>' +
+        '  <div class="small-note">Averages cover the ' + s.n + ' groups with a recorded deal; no-deal groups (grey rows) count in the totals below but contribute no numbers. If a figure still differs from an old class slide, the survey submission and the TA-corrected deal sheet disagree for some group: fix that row in the table.</div>' +
         '  <table class="pf-sum"><tr><th>Avg Abhas Outcome</th><th>Avg Bussan Outcome</th></tr>' +
         '  <tr><td>' + (isFinite(s.avgA) ? s.avgA.toFixed(2) : '-') + '</td><td>' +
              (isFinite(s.avgB) ? s.avgB.toFixed(2) : '-') + '</td></tr></table>' +
@@ -864,8 +903,9 @@
           var grpRows = [{ h: 70, cells: HEAD2.map(function (t) { return tcell(t, '#D9E2F3', { bold: true, size: 24 }); }) }];
           state.groups.forEach(function (g, gi) {
             var a = parseFloat(g.aOut), b = parseFloat(g.bOut);
+            var noDeal = impasseRow(g);
             var ok = isFinite(a) && isFinite(b) && isOptimal(a, b);
-            var fill = (isFinite(a) && isFinite(b)) ? (ok ? '#EDF1F8' : '#FFE699') : '#FFF6DC';
+            var fill = noDeal ? '#E7E6E6' : ((isFinite(a) && isFinite(b)) ? (ok ? '#EDF1F8' : '#FFE699') : '#FFF6DC');
             grpRows.push({
               h: 74,
               cells: [
@@ -879,7 +919,7 @@
                 tcell(g.currency || '-', fill),
                 tcell(isFinite(a) ? a : '-', fill),
                 tcell(isFinite(b) ? b : '-', fill),
-                tcell(isFinite(a) && isFinite(b) ? a + b : '-', fill, { bold: true })
+                tcell(noDeal ? 'No deal' : (isFinite(a) && isFinite(b) ? a + b : '-'), fill, { bold: true })
               ]
             });
           });

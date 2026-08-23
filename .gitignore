@@ -8,3 +8,7 @@ FA2025 LEAD CH - DRM.R
 STATUS.md
 DEPLOY.md
 HANDOFF-DEPLOY.md
+FEEDBACK-TRIAGE.md
+
+# Node test harness; internal only
+tests/
