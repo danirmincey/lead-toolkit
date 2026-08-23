@@ -3,7 +3,7 @@
    Reads the Class 5 nightly survey (the "day 5" CSV with a culturedecision
    column: Assimilation / Separation / Integration) and draws the slide's
    bar chart: "n (x.x%)" over blue bars, category labels below, no axes.
-   The extracted numbers land in an EDITABLE table first | tweak labels or
+   The extracted numbers land in an EDITABLE table first; tweak labels or
    counts and the chart follows. PNG + PowerPoint + pasteable text.
    Verified against the Cluster H slide: 2 (2.8%) / 16 (22.2%) / 54 (75.0%).
    ========================================================================== */
@@ -52,7 +52,9 @@
       headers: [], rows: [], fileName: null, _sheets: null,
       filterCol: -1, includeValues: null,
       col: -1, override: null,
-      barColor: '#4472C4', labelScale: 1, dims: '1600x1200'
+      barColor: '#4472C4', labelScale: 1, dims: '1600x1200',
+      fontFamily: 'Candara',
+      showYAxis: false            // default OFF to match the class slide
     };
 
     container.innerHTML = '' +
@@ -67,40 +69,52 @@
       '        <div class="dropzone" id="cu-drop"><strong>DROP DATA HERE</strong><ul class="drop-spec"><li><b>Type of file:</b> CSV or Excel (.xlsx)</li><li><b>What you\'re looking for:</b> the Class 5 nightly survey with a culturedecision column (e.g. "cluster H day 5 survey.csv")</li></ul></div>' +
       '        <input type="file" id="cu-file" accept=".csv,.tsv,.txt,.xlsx,.xlsm,.xltx" style="display:none">' +
       '        <div id="cu-fileinfo"></div>' +
-      '        <div class="row"><button id="cu-demo" class="fixed">🎲 Demo data</button></div>' +
       '        <label class="field" id="cu-sheetrow" style="display:none">Sheet<select id="cu-sheet"></select></label>' +
+      '        <div class="clusterblock" id="cu-clusterblock" style="display:none">' +
+      '          <div class="clusterlabel">Select cluster(s)</div>' +
+      '          <label class="field">Cluster column<select id="cu-filtercol"></select></label>' +
+      '          <div id="cu-filtervals"></div>' +
+      '        </div>' +
+      '        <div class="row"><button id="cu-demo" class="fixed">🎲 Demo data</button></div>' +
+            '      </div>' +
+      '    </details>' +
+
+      '    <details class="step disabled" open>' +
+      '      <summary><span class="n">2</span> What to chart</summary>' +
+      '      <div class="body">' +
       '        <label class="field">Column<select id="cu-col"></select></label>' +
-      '        <label class="field">Filter people <span class="sub">(e.g. your cluster)</span><select id="cu-filtercol"></select></label>' +
-      '        <div id="cu-filtervals"></div>' +
       '      </div>' +
       '    </details>' +
 
       '    <details class="step disabled" open>' +
-      '      <summary><span class="n">2</span> Numbers <span class="hint">(editable)</span></summary>' +
+      '      <summary><span class="n">3</span> Numbers <span class="hint">(editable)</span></summary>' +
       '      <div class="body">' +
       '        <div id="cu-nums"></div>' +
-      '        <div class="row"><button id="cu-addnum" class="fixed">＋ Add row</button>' +
-      '        <button id="cu-renum" class="fixed">↺ Re-extract</button></div>' +
+      '        <div class="row"><button id="cu-addnum" class="fixed">+ Add row</button>' +
+      '        <button id="cu-renum" class="fixed">Re-extract</button></div>' +
       '      </div>' +
       '    </details>' +
 
       '    <details class="step disabled">' +
-      '      <summary><span class="n">3</span> Style</summary>' +
+      '      <summary><span class="n">4</span> Style</summary>' +
       '      <div class="body">' +
       '        <label class="field">Bar color<input type="color" id="cu-color" value="#4472C4"></label>' +
-      '        <div class="slider-field"><div class="top">Label size <output id="cu-ls-o">1.0×</output></div>' +
+      '        <div class="slider-field"><div class="top">Label size <output id="cu-ls-o">1.0x</output></div>' +
       '          <input type="range" id="cu-ls" min="0.6" max="1.6" step="0.05" value="1"></div>' +
+      '        <label class="field">Font' +
+      '          <select id="cu-font"><option value="Candara" selected>Candara</option><option value="Corbel">Corbel</option><option value="Arial">Arial</option><option value="Georgia">Georgia</option><option value="Calibri">Calibri</option></select></label>' +
+      '        <label class="check"><input type="checkbox" id="cu-yaxis"> Show frequency y axis</label>' +
       '        <label class="field">Image size' +
-      '          <select id="cu-dims"><option value="1600x1200" selected>1600 × 1200</option>' +
-      '          <option value="2000x1200">2000 × 1200 (wide)</option><option value="1200x1400">1200 × 1400 (tall)</option></select></label>' +
+      '          <select id="cu-dims"><option value="1600x1200" selected>1600 x 1200</option>' +
+      '          <option value="2000x1200">2000 x 1200 (wide)</option><option value="1200x1400">1200 x 1400 (tall)</option></select></label>' +
       '      </div>' +
       '    </details>' +
       '  </div>' +
 
       '  <div class="preview-panel">' +
       '    <div class="preview-toolbar">' +
-      '      <button id="cu-png" class="primary" disabled>⬇ PNG</button>' +
-      '      <button id="cu-ppt" disabled>⬇ PowerPoint</button>' +
+      '      <button id="cu-png" class="primary" disabled>Download PNG</button>' +
+      '      <button id="cu-ppt" disabled>Download PowerPoint</button>' +
       '      <button id="cu-copy" disabled>📋 Copy text</button>' +
       '      <span class="status" id="cu-status"></span>' +
       '    </div>' +
@@ -205,6 +219,7 @@
       $('cu-col').value = String(state.col);
       $('cu-filtercol').innerHTML = '<option value="-1">- no filter -</option>' + opts;
       $('cu-filtercol').value = String(state.filterCol);
+      $('cu-clusterblock').style.display = '';
       buildFilterValues();
 
       $('cu-fileinfo').innerHTML = '<span class="file-info">✓ ' + escapeHtml(name) + ' · ' + state.rows.length + ' responses' +
@@ -224,14 +239,47 @@
         uniq.set(v, (uniq.get(v) || 0) + 1);
       });
       if (uniq.size > 40) { state.includeValues = null; return; }
-      if (state.includeValues === null) state.includeValues = new Set(uniq.keys());
+
+      // cluster-picker doctrine: default to NONE unless exactly one unique value
+      if (state.includeValues === null) {
+        if (uniq.size === 1) {
+          state.includeValues = new Set(uniq.keys());
+        } else {
+          state.includeValues = new Set();
+        }
+      }
+
+      var btnRow = document.createElement('div');
+      btnRow.className = 'row';
+      btnRow.style.marginBottom = '4px';
+      var selAll = document.createElement('button');
+      selAll.className = 'fixed';
+      selAll.textContent = 'Select all';
+      var clrAll = document.createElement('button');
+      clrAll.className = 'fixed';
+      clrAll.textContent = 'Clear all';
+      btnRow.appendChild(selAll);
+      btnRow.appendChild(clrAll);
+      box.appendChild(btnRow);
+
       var list = document.createElement('div');
       list.className = 'value-list';
+
+      function refreshLabels() {
+        Array.prototype.forEach.call(list.querySelectorAll('label'), function (lab) {
+          var inp = lab.querySelector('input');
+          var v2 = inp.getAttribute('data-v');
+          var on = state.includeValues.has(v2);
+          inp.checked = on;
+          lab.className = on ? 'on' : '';
+        });
+      }
+
       Array.from(uniq.keys()).sort().forEach(function (v) {
         var lab = document.createElement('label');
         var on = state.includeValues.has(v);
         lab.className = on ? 'on' : '';
-        lab.innerHTML = '<input type="checkbox" ' + (on ? 'checked' : '') + '> ' +
+        lab.innerHTML = '<input type="checkbox" data-v="' + escapeHtml(v) + '" ' + (on ? 'checked' : '') + '> ' +
           (v === '' ? '(blank)' : escapeHtml(v)) + ' <span class="cnt">' + uniq.get(v) + '</span>';
         lab.querySelector('input').addEventListener('change', function (e) {
           if (e.target.checked) state.includeValues.add(v); else state.includeValues.delete(v);
@@ -242,6 +290,36 @@
         list.appendChild(lab);
       });
       box.appendChild(list);
+
+      var note = document.createElement('div');
+      note.className = 'small-note';
+      note.style.marginTop = '4px';
+      box.appendChild(note);
+
+      function updateNote() {
+        note.textContent = (state.includeValues && state.includeValues.size === 0 && uniq.size > 1)
+          ? 'tick your cluster(s) to continue' : '';
+      }
+      updateNote();
+
+      selAll.addEventListener('click', function () {
+        state.includeValues = new Set(uniq.keys());
+        state.override = null;
+        refreshLabels();
+        updateNote();
+        scheduleRender();
+      });
+      clrAll.addEventListener('click', function () {
+        state.includeValues = new Set();
+        state.override = null;
+        refreshLabels();
+        updateNote();
+        scheduleRender();
+      });
+
+      Array.prototype.forEach.call(list.querySelectorAll('input'), function (inp) {
+        inp.addEventListener('change', updateNote);
+      });
     }
 
     function includedRows() {
@@ -268,7 +346,7 @@
         row.className = 'row';
         row.innerHTML = '<input type="text" value="' + escapeHtml(d[0]) + '" style="flex:2;min-width:0">' +
           '<input type="number" step="any" value="' + d[1] + '" style="flex:1;min-width:0">' +
-          '<button class="fixed" data-del="' + i + '" title="remove">×</button>';
+          '<button class="fixed" data-del="' + i + '" title="remove">x</button>';
         box.appendChild(row);
       });
       Array.prototype.forEach.call(box.querySelectorAll('input'), function (inp) {
@@ -313,7 +391,18 @@
 
     function render() {
       var data = currentData();
-      if (!data.length) { $('cu-status').textContent = ''; return; }
+      if (!data.length) {
+        canvas.style.display = 'none';
+        var em = $('cu-empty');
+        em.textContent = (state.filterCol >= 0 && state.includeValues !== null && state.includeValues.size === 0)
+          ? 'tick your cluster(s) above to continue' : 'output displayed HERE';
+        em.style.display = '';
+        $('cu-png').disabled = true;
+        $('cu-ppt').disabled = true;
+        $('cu-copy').disabled = true;
+        $('cu-status').textContent = '';
+        return;
+      }
       if (!state.override) buildNums(data);
       var total = data.reduce(function (s, d) { return s + d[1]; }, 0);
 
@@ -326,15 +415,46 @@
       ctx.fillStyle = '#FFFFFF';
       ctx.fillRect(0, 0, W, H);
 
-      var fBody = 'Candara, "Gill Sans", Calibri, sans-serif';
+      var fBody = state.fontFamily + ', Candara, "Gill Sans", sans-serif';
       var labPx = Math.round(0.026 * H * state.labelScale);
-      var mL = 0.03 * W, mR = 0.03 * W, mT = 0.10 * H, mB = 0.24 * H;
-      var plotW = W - mL - mR, plotH = H - mT - mB;
+      var axisPx = Math.round(0.022 * H);
       var maxN = Math.max.apply(null, data.map(function (d) { return d[1]; }));
+      var scaleMax = maxN;
+
+      var mL = state.showYAxis ? 0.06 * W : 0.03 * W;
+      var mR = 0.03 * W, mT = 0.10 * H, mB = 0.24 * H;
+      var plotW = W - mL - mR, plotH = H - mT - mB;
       var slot = plotW / data.length, barW = slot * 0.72;
 
+      // optional frequency y axis: 4-6 ticks, 0 up to a nice rounded max
+      if (state.showYAxis && maxN > 0) {
+        var rough = maxN / 5;
+        var mag = Math.pow(10, Math.floor(Math.log(Math.max(rough, 1)) / Math.LN10));
+        var cands = [1, 2, 5, 10], yStep = 10 * mag;
+        for (var ci = 0; ci < cands.length; ci++) {
+          if (cands[ci] * mag >= rough) { yStep = cands[ci] * mag; break; }
+        }
+        if (yStep < 1) yStep = 1;
+        var yMax = Math.ceil(maxN / yStep) * yStep;
+        scaleMax = yMax;
+        ctx.strokeStyle = '#D9D9D9';
+        ctx.lineWidth = Math.max(1, 0.002 * H);
+        ctx.beginPath();
+        ctx.moveTo(mL, mT - 0.02 * H);
+        ctx.lineTo(mL, mT + plotH);
+        ctx.stroke();
+        ctx.fillStyle = '#333';
+        ctx.font = axisPx + 'px ' + fBody;
+        ctx.textAlign = 'right';
+        ctx.textBaseline = 'middle';
+        for (var yv = 0; yv <= yMax; yv += yStep) {
+          var yy = mT + plotH - plotH * yv / yMax;
+          ctx.fillText(String(yv), mL - 0.01 * W, yy);
+        }
+      }
+
       data.forEach(function (d, i) {
-        var h = plotH * d[1] / maxN;
+        var h = scaleMax ? plotH * d[1] / scaleMax : 0;
         var x = mL + slot * i + (slot - barW) / 2;
         var y = mT + plotH - h;
         ctx.fillStyle = state.barColor;
@@ -354,7 +474,7 @@
       $('cu-png').disabled = false;
       $('cu-ppt').disabled = false;
       $('cu-copy').disabled = false;
-      $('cu-status').textContent = 'n = ' + total + ' · ' + data.length + ' categories · ' + W + '×' + H;
+      $('cu-status').textContent = 'n = ' + total + ' · ' + data.length + ' categories · ' + W + 'x' + H;
     }
 
     /* ---------- events ---------- */
@@ -388,9 +508,11 @@
     $('cu-color').addEventListener('input', function (e) { state.barColor = e.target.value; scheduleRender(); });
     $('cu-ls').addEventListener('input', function (e) {
       state.labelScale = parseFloat(e.target.value);
-      $('cu-ls-o').textContent = state.labelScale.toFixed(2).replace(/0$/, '') + '×';
+      $('cu-ls-o').textContent = state.labelScale.toFixed(2).replace(/0$/, '') + 'x';
       scheduleRender();
     });
+    $('cu-font').addEventListener('change', function (e) { state.fontFamily = e.target.value; scheduleRender(); });
+    $('cu-yaxis').addEventListener('change', function (e) { state.showYAxis = e.target.checked; scheduleRender(); });
     $('cu-dims').addEventListener('change', function (e) { state.dims = e.target.value; scheduleRender(); });
 
     // demo answers matching the slide (2 / 16 / 54)
@@ -417,7 +539,7 @@
         return d[0] + ': ' + pctLabel(d[1], total);
       }).join('\n');
       (navigator.clipboard ? navigator.clipboard.writeText(txt) : Promise.reject()).then(function () {
-        $('cu-status').textContent = 'copied ✓';
+        $('cu-status').textContent = 'copied';
       }, function () {
         window.prompt('Copy:', txt);
       });

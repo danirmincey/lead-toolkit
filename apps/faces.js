@@ -1,13 +1,17 @@
 /* ==========================================================================
    App 3 | Faces (bubble collage)
-   Upload class headshots → circular-bubble collage with an open middle
+   Upload class headshots -> circular-bubble collage with an open middle
    space and optional center text, like the "YOU are all leaders!" slide.
    - Layout adapts to however many faces are loaded (area-based sizing,
      seeded rejection placement, no overlaps, keep-out ellipse in middle).
+   - Grid mode: uniform squares in rows and columns sized to fill the
+     canvas; partial last row is centered; optional corner radius.
    - Rudimentary auto face-centering: Chrome's FaceDetector API when
      available, otherwise a skin-tone-centroid heuristic; ALWAYS refinable
      by hand (drag inside a bubble to pan, editor panel to zoom/resize).
-   - Exports PNG and real PPTX (each photo cropped + ellipse geometry +
+   - Cmd/Ctrl+V in the edit panel pastes a clipboard image, replacing the
+     selected photo.
+   - Exports PNG and real PPTX (each photo cropped + ellipse/rect geometry +
      border as native PowerPoint objects, editable afterwards).
    All processing stays in the browser; photos never leave the machine.
    ========================================================================== */
@@ -80,7 +84,143 @@
     return result;
   }
 
-  /* Skin-tone centroid heuristic on RGBA pixel data (w×h). Returns
+  /* Grid layout: place N photos as uniform squares filling W x H.
+     Returns [{x, y, side, col, row}] aligned with input order; ALWAYS N
+     entries, no photo is ever dropped.
+     - cols = round(sqrt(N * W/H)) so the grid roughly matches the canvas
+       aspect ratio; photo rows = ceil(N / cols).
+     - opts.midRowStart / opts.midRowEnd: row indices (inclusive) reserved
+       for the middle-text band. Reserved rows are EXTRA rows: the grid
+       grows by that many rows and every photo still gets a cell.
+     - square side = min over width/height so the whole block fits.
+     - a partial row is centred horizontally.
+     - opts.gapPx: pixel gap between squares (default 0). */
+  function layoutGrid(N, W, H, opts) {
+    opts = opts || {};
+    var gap = opts.gapPx !== undefined ? opts.gapPx : 0;
+    if (N <= 0) return [];
+    var midStart = opts.midRowStart !== undefined ? opts.midRowStart : -1;
+    var midEnd   = opts.midRowEnd   !== undefined ? opts.midRowEnd   : -2;
+    var reserved = midStart >= 0 ? (midEnd - midStart + 1) : 0;
+    // choose cols to roughly match the canvas aspect
+    var cols = Math.max(1, Math.round(Math.sqrt(N * W / H)));
+    var photoRows = Math.ceil(N / cols);
+    var rows = photoRows + reserved;
+    // square side such that the whole block (incl. reserved rows) fits
+    var side = Math.min(
+      (W - gap * (cols - 1)) / cols,
+      (H - gap * (rows - 1)) / rows
+    );
+    // total grid block width/height (used for centring the whole grid)
+    var blockW = cols * side + gap * (cols - 1);
+    var blockH = rows * side + gap * (rows - 1);
+    var originX = (W - blockW) / 2;
+    var originY = (H - blockH) / 2;
+
+    var result = [];
+    var photoIdx = 0;
+    for (var row = 0; row < rows && photoIdx < N; row++) {
+      // rows reserved for the middle text band hold no photos
+      if (reserved > 0 && row >= midStart && row <= midEnd) continue;
+      // how many squares go in this row?
+      var remaining = N - photoIdx;
+      var inRow = Math.min(cols, remaining);
+      // centre partial row horizontally
+      var rowOffsetX = (cols - inRow) * (side + gap) / 2;
+      for (var col = 0; col < inRow; col++) {
+        result.push({
+          x: originX + rowOffsetX + col * (side + gap),
+          y: originY + row * (side + gap),
+          side: side,
+          col: col,
+          row: row
+        });
+        photoIdx++;
+      }
+    }
+    return result;
+  }
+
+  /* Middle band geometry for grid mode: returns {x,y,w,h} of the reserved
+     strip (rows midRowStart..midRowEnd), computed with the SAME geometry
+     as layoutGrid so the band lines up exactly with the skipped rows. */
+  function gridGapRect(N, W, H, gapPx, midRowStart, midRowEnd) {
+    var gap = gapPx || 0;
+    if (N <= 0 || midRowStart < 0) return null;
+    var reserved = midRowEnd - midRowStart + 1;
+    var cols = Math.max(1, Math.round(Math.sqrt(N * W / H)));
+    var rows = Math.ceil(N / cols) + reserved;
+    var side = Math.min(
+      (W - gap * (cols - 1)) / cols,
+      (H - gap * (rows - 1)) / rows
+    );
+    var blockH = rows * side + gap * (rows - 1);
+    var originY = (H - blockH) / 2;
+    var blockW = cols * side + gap * (cols - 1);
+    var originX = (W - blockW) / 2;
+    var y0 = originY + midRowStart * (side + gap);
+    var y1 = originY + midRowEnd * (side + gap) + side;
+    return { x: originX, y: y0, w: blockW, h: y1 - y0 };
+  }
+
+  /* Default middle band for grid mode: one or two EXTRA rows nearest the
+     vertical centre of the expanded grid. Returns {start, end}
+     ({start: -1, end: -2} when a single photo row leaves no room). */
+  function defaultMidRows(N, W, H) {
+    var cols = Math.max(1, Math.round(Math.sqrt(N * W / H)));
+    var photoRows = Math.ceil(N / cols);
+    if (photoRows < 2) return { start: -1, end: -2 };  // no room
+    var band = photoRows >= 6 ? 2 : 1;
+    var rows = photoRows + band;
+    var start = Math.floor((rows - band) / 2);
+    return { start: start, end: start + band - 1 };
+  }
+
+  /* Wrap + scale text so it fits inside a rectangle (maxW x maxH), with
+     at most maxLines lines (default 3). Returns {lines, fontSize} where
+     lines is an array of strings. ctx must already have the right font
+     family / weight set (the font string is mutated during measurement). */
+  function fitText(ctx, text, maxW, maxH, startPx, minPx, fontPrefix, maxLines) {
+    // fontPrefix e.g. "700 58px Corbel, sans-serif" -> we rebuild it
+    var maxL = maxLines || 3;
+    var px = startPx;
+    var lines, fits;
+    function measure(str, size) {
+      ctx.font = fontPrefix.replace(/\d+px/, size + 'px');
+      return ctx.measureText(str).width;
+    }
+    function wrapAt(size) {
+      ctx.font = fontPrefix.replace(/\d+px/, size + 'px');
+      var words = text.split(/\s+/);
+      var out = [], cur = '';
+      for (var i = 0; i < words.length; i++) {
+        var test = cur ? cur + ' ' + words[i] : words[i];
+        if (ctx.measureText(test).width > maxW && cur) {
+          out.push(cur);
+          cur = words[i];
+        } else {
+          cur = test;
+        }
+      }
+      if (cur) out.push(cur);
+      return out;
+    }
+    for (px = startPx; px >= minPx; px -= 2) {
+      lines = wrapAt(px);
+      var lineH = px * 1.25;
+      var totalH = lines.length * lineH;
+      var maxLineW = 0;
+      for (var li = 0; li < lines.length; li++) {
+        var lw = measure(lines[li], px);
+        if (lw > maxLineW) maxLineW = lw;
+      }
+      if (maxLineW <= maxW && totalH <= maxH && lines.length <= maxL) { fits = true; break; }
+    }
+    if (!fits) { px = minPx; lines = wrapAt(px); }
+    return { lines: lines, fontSize: px };
+  }
+
+  /* Skin-tone centroid heuristic on RGBA pixel data (w x h). Returns
      {fx, fy} normalized focus point, or null if not enough skin found. */
   function skinCentroid(data, w, h) {
     var sx = 0, sy = 0, count = 0, total = w * h;
@@ -114,11 +254,15 @@
       fill: 0.40, variety: 0.30,
       holePct: 0.34,
       showText: true, text: 'YOU are all leaders!', textDirty: false, _appliedSub: '',
-      textPx: 58, textColor: '#2E75B6', textFont: 'Arial',
-      borderPct: 0.12, borderColor: '#2E75B6', bg: '#FFFFFF',
+      textPx: 58, textColor: '#2E75B6', textFont: 'Corbel',
+      borderPct: 0.12, borderColor: '#2E75B6', borderAutoMatch: true, bg: '#FFFFFF',
       dims: '2560x1440',
-      selected: null,        // photo id being edited
-      layout: {}             // photo id -> {x,y,r} from last render
+      layoutStyle: 'bubbles',  // 'bubbles' | 'grid'
+      gridCornerRadius: 0,      // px corner radius for squares
+      gridGapPx: 4,             // gap between squares in grid mode
+      gridShowText: false,      // grid: text gap on by default OFF
+      selected: null,           // photo id being edited
+      layout: {}                // photo id -> {x,y,r} or {x,y,side} from last render
     };
 
     container.innerHTML = '' +
@@ -133,12 +277,20 @@
       '        <div class="dropzone" id="fc-drop"><strong>DROP DATA HERE</strong><ul class="drop-spec"><li><b>Type of file:</b> photos: JPG, PNG or WEBP (multi-select and click-to-choose work; HEIC does not load in browsers)</li><li><b>What you\'re looking for:</b> the class headshots, one image per student</li></ul></div>' +
       '        <input type="file" id="fc-file" accept="image/*" multiple style="display:none">' +
       '        <div id="fc-fileinfo"></div>' +
-      '        <div class="row">' +
-      '          <button id="fc-sample" class="fixed">🎲 Demo data</button>' +
-      '          <button id="fc-clear" class="fixed">Clear all</button>' +
+      '        <div class="clusterblock" id="fc-clusterblock" style="display:none">' +
+      '          <div class="clusterlabel">Select cluster(s)</div>' +
+      '          <div class="small-note">(not applicable for photo uploads)</div>' +
       '        </div>' +
+      '        <div class="row"><button id="fc-sample" class="fixed">🎲 Demo data</button></div>' +
+      '      </div>' +
+      '    </details>' +
+
+      '    <details class="step" id="fc-photostep" style="display:none" open>' +
+      '      <summary><span class="n">2</span> Photos loaded</summary>' +
+      '      <div class="body">' +
+      '        <div class="row"><button id="fc-clear" class="fixed">Clear all</button></div>' +
       '        <div class="word-list" id="fc-thumbs" style="display:none"></div>' +
-      '        <div class="small-note">Click a photo (here or in the preview) to recenter it. Drag inside a bubble on the preview to pan.</div>' +
+      '        <div class="small-note">Click a photo (here or in the preview) to recenter it. Drag inside a bubble on the preview to pan. Select a photo and paste (⌘V) to replace it.</div>' +
       '      </div>' +
       '    </details>' +
 
@@ -161,13 +313,29 @@
       '          </div>' +
       '        </div>' +
       '        <div class="small-note">Drag the little preview to move the face inside the circle.</div>' +
+      '        <div class="small-note">paste (⌘V) to replace this photo</div>' +
+      '      </div>' +
+      '    </details>' +
+
+      '    <details class="step disabled" open id="fc-step-layout">' +
+      '      <summary><span class="n">3</span> Layout style</summary>' +
+      '      <div class="body">' +
+      '        <label class="field">Style' +
+      '          <select id="fc-layoutstyle">' +
+      '            <option value="bubbles">Bubbles (classic)</option>' +
+      '            <option value="grid">Grid (squares)</option>' +
+      '          </select></label>' +
+      '        <div id="fc-grid-opts" style="display:none">' +
+      '          <div class="slider-field"><div class="top">Corner radius <output id="fc-gcr-o">0px</output></div>' +
+      '            <input type="range" id="fc-gcr" min="0" max="80" step="2" value="0"></div>' +
+      '        </div>' +
       '      </div>' +
       '    </details>' +
 
       '    <details class="step disabled" open id="fc-step2">' +
-      '      <summary><span class="n">2</span> Middle space & text</summary>' +
+      '      <summary><span class="n">4</span> Middle space & text</summary>' +
       '      <div class="body">' +
-      '        <div class="slider-field"><div class="top">Middle space size <output id="fc-hole-o">34%</output></div>' +
+      '        <div class="slider-field" id="fc-hole-field"><div class="top">Middle space size <output id="fc-hole-o">34%</output></div>' +
       '          <input type="range" id="fc-hole" min="0" max="80" step="2" value="34"></div>' +
       '        <label class="check"><input type="checkbox" id="fc-showtext" checked> Center text</label>' +
       '        <input type="text" id="fc-text" value="YOU are all leaders!">' +
@@ -177,24 +345,31 @@
       '          <input type="color" id="fc-tcolor" value="#2E75B6" class="fixed" style="width:42px">' +
       '        </div>' +
       '        <label class="field">Text font' +
-      '          <select id="fc-tfont"><option>Arial</option><option>Helvetica Neue</option><option>Georgia</option>' +
-      '          <option>Trebuchet MS</option><option>Verdana</option></select></label>' +
+      '          <select id="fc-tfont">' +
+      '            <option value="Corbel" selected>Corbel</option>' +
+      '            <option value="Candara">Candara</option>' +
+      '            <option value="Arial">Arial</option>' +
+      '            <option value="Georgia">Georgia</option>' +
+      '          </select></label>' +
       '      </div>' +
       '    </details>' +
 
       '    <details class="step disabled" open id="fc-step3">' +
-      '      <summary><span class="n">3</span> Bubbles & style</summary>' +
+      '      <summary><span class="n">5</span> Bubbles & style</summary>' +
       '      <div class="body">' +
-      '        <div class="slider-field"><div class="top">Bubble size (density) <output id="fc-fill-o">40%</output></div>' +
-      '          <input type="range" id="fc-fill" min="20" max="58" step="2" value="40"></div>' +
-      '        <div class="slider-field"><div class="top">Size variety <output id="fc-var-o">30%</output></div>' +
-      '          <input type="range" id="fc-var" min="0" max="60" step="5" value="30"></div>' +
+      '        <div id="fc-bubble-opts">' +
+      '          <div class="slider-field"><div class="top">Bubble size (density) <output id="fc-fill-o">40%</output></div>' +
+      '            <input type="range" id="fc-fill" min="20" max="58" step="2" value="40"></div>' +
+      '          <div class="slider-field"><div class="top">Size variety <output id="fc-var-o">30%</output></div>' +
+      '            <input type="range" id="fc-var" min="0" max="60" step="5" value="30"></div>' +
+      '        </div>' +
       '        <div class="slider-field"><div class="top">Ring thickness <output id="fc-bw-o">12%</output></div>' +
       '          <input type="range" id="fc-bw" min="0" max="25" step="1" value="12"></div>' +
       '        <div class="row">' +
       '          <label class="field">Ring color<input type="color" id="fc-bc" value="#2E75B6"></label>' +
       '          <label class="field">Background<input type="color" id="fc-bg" value="#FFFFFF"></label>' +
       '        </div>' +
+      '        <label class="check"><input type="checkbox" id="fc-bc-automatch" checked> Ring color auto-matches text color</label>' +
       '        <label class="field">Image size' +
       '          <select id="fc-dims">' +
       '            <option value="2560x1440">2560 × 1440 (16:9, default)</option>' +
@@ -271,7 +446,9 @@
     function afterPhotosChanged() {
       var n = state.photos.length;
       $('fc-count').textContent = n ? (n + ' photos') : '';
-      ['fc-step2', 'fc-step3'].forEach(function (s) { $(s).classList.remove('disabled'); });
+      $('fc-photostep').style.display = n ? '' : 'none';
+      $('fc-clusterblock').style.display = n ? '' : 'none';
+      ['fc-step-layout', 'fc-step2', 'fc-step3'].forEach(function (s) { $(s).classList.remove('disabled'); });
       $('fc-png').disabled = !n;
       $('fc-pptx').disabled = !n;
       renderThumbs();
@@ -380,6 +557,63 @@
       }
     }
 
+    /* Draw a photo into a square cell (x,y,side) with optional corner radius.
+       ringPx: border width; ringColor: border colour. */
+    function drawFaceSquare(ctx, p, x, y, side, ringPx, ringColor, cornerRadius) {
+      var half = side / 2;
+      var cx = x + half, cy = y + half;
+      var r = half;                         // use half-side as "radius" for faceDrawParams
+      var g = faceDrawParams(p, r);
+      var dx = cx - p.fx * g.dw, dy = cy - p.fy * g.dh;
+      dx = Math.min(x, Math.max(x + side - g.dw, dx));
+      dy = Math.min(y, Math.max(y + side - g.dh, dy));
+      var cr = Math.min(cornerRadius || 0, half);
+      ctx.save();
+      // clip to rounded rectangle
+      ctx.beginPath();
+      if (cr > 0 && ctx.roundRect) {
+        ctx.roundRect(x, y, side, side, cr);
+      } else if (cr > 0) {
+        // manual rounded rect for browsers without roundRect
+        ctx.moveTo(x + cr, y);
+        ctx.lineTo(x + side - cr, y); ctx.arcTo(x + side, y, x + side, y + cr, cr);
+        ctx.lineTo(x + side, y + side - cr); ctx.arcTo(x + side, y + side, x + side - cr, y + side, cr);
+        ctx.lineTo(x + cr, y + side); ctx.arcTo(x, y + side, x, y + side - cr, cr);
+        ctx.lineTo(x, y + cr); ctx.arcTo(x, y, x + cr, y, cr);
+        ctx.closePath();
+      } else {
+        ctx.rect(x, y, side, side);
+      }
+      ctx.clip();
+      ctx.fillStyle = '#EEE';
+      ctx.fill();
+      ctx.drawImage(p.img, dx, dy, g.dw, g.dh);
+      ctx.restore();
+      if (ringPx > 0) {
+        ctx.save();
+        ctx.strokeStyle = ringColor;
+        ctx.lineWidth = ringPx;
+        ctx.beginPath();
+        var inset = ringPx / 2;
+        var ix = x + inset, iy = y + inset, is = side - ringPx;
+        var icr = Math.max(0, cr - inset);
+        if (icr > 0 && ctx.roundRect) {
+          ctx.roundRect(ix, iy, is, is, icr);
+        } else if (icr > 0) {
+          ctx.moveTo(ix + icr, iy);
+          ctx.lineTo(ix + is - icr, iy); ctx.arcTo(ix + is, iy, ix + is, iy + icr, icr);
+          ctx.lineTo(ix + is, iy + is - icr); ctx.arcTo(ix + is, iy + is, ix + is - icr, iy + is, icr);
+          ctx.lineTo(ix + icr, iy + is); ctx.arcTo(ix, iy + is, ix, iy + is - icr, icr);
+          ctx.lineTo(ix, iy + icr); ctx.arcTo(ix, iy, ix + icr, iy, icr);
+          ctx.closePath();
+        } else {
+          ctx.rect(ix, iy, is, is);
+        }
+        ctx.stroke();
+        ctx.restore();
+      }
+    }
+
     function currentMults() {
       return state.photos.map(function (p) {
         return p.mult * (1 - state.variety / 2 + p.jit * state.variety);
@@ -396,6 +630,37 @@
       renderTimer = setTimeout(render, immediate ? 0 : 150);
     }
 
+    function drawMiddleText(ctx, W, H, textArea) {
+      // textArea: {x,y,w,h} or null (use center of canvas with reasonable defaults)
+      if (!state.showText || !state.text) return;
+      var areaX, areaY, areaW, areaH;
+      if (textArea) {
+        areaX = textArea.x; areaY = textArea.y; areaW = textArea.w; areaH = textArea.h;
+      } else {
+        var ko2 = keepoutSpec(W, H) || { cx: W / 2, cy: H / 2, rx: W * 0.2, ry: H * 0.15 };
+        areaX = ko2.cx - ko2.rx; areaY = ko2.cy - ko2.ry;
+        areaW = 2 * ko2.rx; areaH = 2 * ko2.ry;
+      }
+      var basePx = Math.round(state.textPx * (W / 2560));
+      var minPx = 12;
+      var fontPrefix = '700 ' + basePx + 'px ' + state.textFont + ', sans-serif';
+      var padding = Math.max(8, areaW * 0.04);
+      var maxW = areaW - padding * 2;
+      var maxH = areaH - padding * 2;
+      if (maxW < 20 || maxH < 20) return;
+      var fit = fitText(ctx, state.text, maxW, maxH, basePx, minPx, fontPrefix, 3);
+      ctx.fillStyle = state.textColor;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.font = '700 ' + fit.fontSize + 'px ' + state.textFont + ', sans-serif';
+      var lineH = fit.fontSize * 1.25;
+      var totalH = fit.lines.length * lineH;
+      var startY = areaY + areaH / 2 - totalH / 2 + lineH / 2;
+      for (var li = 0; li < fit.lines.length; li++) {
+        ctx.fillText(fit.lines[li], areaX + areaW / 2, startY + li * lineH);
+      }
+    }
+
     function render() {
       if (!state.photos.length) return;
       var d = state.dims.split('x');
@@ -407,36 +672,71 @@
       ctx.fillStyle = state.bg;
       ctx.fillRect(0, 0, W, H);
 
-      var ko = keepoutSpec(W, H);
-      var pos = layoutBubbles(currentMults(), W, H, {
-        seed: state.seed, fill: state.fill, keepout: ko
-      });
+      var ringColor = state.borderColor;
       state.layout = {};
-      state.photos.forEach(function (p, i) {
-        var q = pos[i];
-        state.layout[p.id] = q;
-        var ringPx = Math.max(0, state.borderPct * q.r);
-        drawFace(ctx, p, q.x, q.y, q.r, ringPx, state.borderColor);
-        if (state.selected === p.id) {
-          ctx.beginPath();
-          ctx.arc(q.x, q.y, q.r + ringPx + 6, 0, 2 * Math.PI);
-          ctx.strokeStyle = '#F59E0B';
-          ctx.lineWidth = 5;
-          ctx.setLineDash([14, 10]);
-          ctx.stroke();
-          ctx.setLineDash([]);
-        }
-      });
 
-      if (state.showText && state.text) {
-        ctx.fillStyle = state.textColor;
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        ctx.font = '700 ' + Math.round(state.textPx * (W / 2560)) + 'px ' + state.textFont + ', sans-serif';
-        ctx.fillText(state.text, W / 2, H / 2);
+      if (state.layoutStyle === 'grid') {
+        // --- GRID MODE ---
+        var N = state.photos.length;
+        var gapPx = state.gridGapPx;
+        var midRows = null, gapRect = null;
+        if (state.gridShowText && state.showText && state.text) {
+          midRows = defaultMidRows(N, W, H);
+          if (midRows.start >= 0) {
+            gapRect = gridGapRect(N, W, H, gapPx, midRows.start, midRows.end);
+          }
+        }
+        var gridOpts = { gapPx: gapPx };
+        if (midRows && midRows.start >= 0) {
+          gridOpts.midRowStart = midRows.start;
+          gridOpts.midRowEnd   = midRows.end;
+        }
+        var gridPos = layoutGrid(N, W, H, gridOpts);
+        var cr = state.gridCornerRadius;
+        state.photos.forEach(function (p, i) {
+          var q = gridPos[i];
+          if (!q) return;   // null = skipped (mid-gap row)
+          state.layout[p.id] = q;
+          var ringPx = Math.max(0, state.borderPct * q.side);
+          drawFaceSquare(ctx, p, q.x, q.y, q.side, ringPx, ringColor, cr);
+          if (state.selected === p.id) {
+            ctx.save();
+            ctx.strokeStyle = '#F59E0B';
+            ctx.lineWidth = 5;
+            ctx.setLineDash([14, 10]);
+            ctx.strokeRect(q.x - 6, q.y - 6, q.side + 12, q.side + 12);
+            ctx.setLineDash([]);
+            ctx.restore();
+          }
+        });
+        if (state.gridShowText) {
+          drawMiddleText(ctx, W, H, gapRect || null);
+        }
+      } else {
+        // --- BUBBLES MODE ---
+        var ko = keepoutSpec(W, H);
+        var pos = layoutBubbles(currentMults(), W, H, {
+          seed: state.seed, fill: state.fill, keepout: ko
+        });
+        state.photos.forEach(function (p, i) {
+          var q = pos[i];
+          state.layout[p.id] = q;
+          var ringPx = Math.max(0, state.borderPct * q.r);
+          drawFace(ctx, p, q.x, q.y, q.r, ringPx, ringColor);
+          if (state.selected === p.id) {
+            ctx.beginPath();
+            ctx.arc(q.x, q.y, q.r + ringPx + 6, 0, 2 * Math.PI);
+            ctx.strokeStyle = '#F59E0B';
+            ctx.lineWidth = 5;
+            ctx.setLineDash([14, 10]);
+            ctx.stroke();
+            ctx.setLineDash([]);
+          }
+        });
+        drawMiddleText(ctx, W, H, null);
       }
 
-      $('fc-status').textContent = state.photos.length + ' faces · ' + W + '×' + H + ' · layout #' + state.seed;
+      $('fc-status').textContent = state.photos.length + ' faces · ' + W + 'x' + H + ' · ' + state.layoutStyle + ' layout';
       drawEditor();
     }
 
@@ -449,13 +749,48 @@
       if (p) {
         $('fc-editname').textContent = p.name;
         $('fc-ez').value = p.zoom;
-        $('fc-ez-o').textContent = p.zoom.toFixed(2).replace(/0$/, '') + '×';
+        $('fc-ez-o').textContent = p.zoom.toFixed(2).replace(/0$/, '') + 'x';
         $('fc-esize').value = String(p.mult);
         $('fc-editstep').open = true;
       }
       renderThumbs();
       scheduleRender(true);
     }
+
+    // Cmd/Ctrl+V in the edit panel replaces the selected photo
+    function onEditPanelPaste(e) {
+      var editStep = $('fc-editstep');
+      if (!editStep || editStep.style.display === 'none') return;
+      if (container.offsetParent === null) return;  // app not visible
+      var p = photoById(state.selected);
+      if (!p) return;
+      var items = (e.clipboardData && e.clipboardData.items) || [];
+      var blob = null;
+      for (var i = 0; i < items.length; i++) {
+        if (items[i].type && items[i].type.indexOf('image/') === 0) {
+          blob = items[i].getAsFile();
+          break;
+        }
+      }
+      if (!blob) return;
+      e.preventDefault();
+      var url = URL.createObjectURL(blob);
+      var img = new Image();
+      img.onload = function () {
+        if (p.url && p.name.indexOf('sample') !== 0) URL.revokeObjectURL(p.url);
+        p.img = img;
+        p.url = URL.createObjectURL(blob);
+        p.name = 'pasted-image.png';
+        p.fx = 0.5; p.fy = 0.44; p.zoom = 1;
+        autoCenterPhoto(p).then(function () {
+          URL.revokeObjectURL(url);
+          selectPhoto(p.id);
+        });
+      };
+      img.onerror = function () { URL.revokeObjectURL(url); };
+      img.src = url;
+    }
+    document.addEventListener('paste', onEditPanelPaste);
 
     function drawEditor() {
       var p = photoById(state.selected);
@@ -498,8 +833,14 @@
         for (var i = state.photos.length - 1; i >= 0; i--) {
           var p = state.photos[i], q = state.layout[p.id];
           if (!q) continue;
-          var dx = pt.x - q.x, dy = pt.y - q.y;
-          if (dx * dx + dy * dy <= q.r * q.r) return p;
+          if (q.side !== undefined) {
+            // grid mode: rect hit-test
+            if (pt.x >= q.x && pt.x <= q.x + q.side && pt.y >= q.y && pt.y <= q.y + q.side) return p;
+          } else {
+            // bubble mode: circle hit-test
+            var dx = pt.x - q.x, dy = pt.y - q.y;
+            if (dx * dx + dy * dy <= q.r * q.r) return p;
+          }
         }
         return null;
       }
@@ -515,7 +856,8 @@
         var scaleX = canvas.width / rect.width;
         var dxPx = (e.clientX - lastX) * scaleX, dyPx = (e.clientY - lastY) * scaleX;
         if (Math.abs(dxPx) + Math.abs(dyPx) > 2) moved = true;
-        var g = faceDrawParams(dragging, q.r);
+        var r = q.r !== undefined ? q.r : q.side / 2;
+        var g = faceDrawParams(dragging, r);
         dragging.fx = Math.min(1, Math.max(0, dragging.fx - dxPx / g.dw));
         dragging.fy = Math.min(1, Math.max(0, dragging.fy - dyPx / g.dh));
         lastX = e.clientX; lastY = e.clientY;
@@ -599,30 +941,80 @@
       });
     }
 
+    function cropSquareBytesForGrid(p, side) {
+      var sz = Math.max(256, Math.min(512, Math.round(side)));
+      var oc = document.createElement('canvas');
+      oc.width = sz; oc.height = sz;
+      var ctx = oc.getContext('2d');
+      var g = faceDrawParams(p, sz / 2);
+      var cx = sz / 2, cy = sz / 2;
+      var dx = cx - p.fx * g.dw, dy = cy - p.fy * g.dh;
+      dx = Math.min(0, Math.max(sz - g.dw, dx));
+      dy = Math.min(0, Math.max(sz - g.dh, dy));
+      ctx.fillStyle = '#EEE'; ctx.fillRect(0, 0, sz, sz);
+      ctx.drawImage(p.img, dx, dy, g.dw, g.dh);
+      return new Promise(function (resolve) {
+        oc.toBlob(function (blob) {
+          blob.arrayBuffer().then(function (ab) { resolve(new Uint8Array(ab)); });
+        }, 'image/png');
+      });
+    }
+
     function exportPptx() {
       if (!window.pptxLite) { alert('pptx-lite failed to load'); return; }
       var d = state.dims.split('x');
       var W = parseInt(d[0], 10), H = parseInt(d[1], 10);
-      $('fc-status').textContent = 'Building .pptx…';
-      var jobs = state.photos.map(function (p) {
-        var q = state.layout[p.id];
-        return cropSquareBytes(p, q.r).then(function (bytes) {
-          var ringPx = Math.max(0, state.borderPct * q.r);
-          return {
-            bytes: bytes, ext: 'png',
-            x: q.x - q.r, y: q.y - q.r, w: 2 * q.r, h: 2 * q.r,
-            shape: 'ellipse', borderColor: state.borderColor, borderPx: ringPx,
-            name: p.name
-          };
+      $('fc-status').textContent = 'Building .pptx...';
+
+      var jobs;
+      if (state.layoutStyle === 'grid') {
+        jobs = state.photos.map(function (p) {
+          var q = state.layout[p.id];
+          if (!q) return Promise.resolve(null);
+          var ringPx = Math.max(0, state.borderPct * q.side);
+          return cropSquareBytesForGrid(p, q.side).then(function (bytes) {
+            return {
+              bytes: bytes, ext: 'png',
+              x: q.x, y: q.y, w: q.side, h: q.side,
+              shape: 'rect', borderColor: state.borderColor, borderPx: ringPx,
+              name: p.name
+            };
+          });
         });
-      });
+      } else {
+        jobs = state.photos.map(function (p) {
+          var q = state.layout[p.id];
+          return cropSquareBytes(p, q.r).then(function (bytes) {
+            var ringPx = Math.max(0, state.borderPct * q.r);
+            return {
+              bytes: bytes, ext: 'png',
+              x: q.x - q.r, y: q.y - q.r, w: 2 * q.r, h: 2 * q.r,
+              shape: 'ellipse', borderColor: state.borderColor, borderPx: ringPx,
+              name: p.name
+            };
+          });
+        });
+      }
+
       Promise.all(jobs).then(function (images) {
+        images = images.filter(function (im) { return im !== null; });
         var texts = [];
-        if (state.showText && state.text) {
-          var ko = keepoutSpec(W, H) || { cx: W / 2, cy: H / 2, rx: W * 0.2, ry: H * 0.15 };
+        var showTxt = state.layoutStyle === 'grid' ? (state.gridShowText && state.showText) : state.showText;
+        if (showTxt && state.text) {
+          var textArea = null;
+          if (state.layoutStyle === 'grid') {
+            var midR = defaultMidRows(state.photos.length, W, H);
+            if (midR.start >= 0) {
+              textArea = gridGapRect(state.photos.length, W, H, state.gridGapPx, midR.start, midR.end);
+            }
+          }
+          if (!textArea) {
+            var ko = keepoutSpec(W, H) || { cx: W / 2, cy: H / 2, rx: W * 0.2, ry: H * 0.15 };
+            textArea = { x: ko.cx - ko.rx, y: ko.cy - ko.ry / 2, w: 2 * ko.rx, h: ko.ry };
+          }
           texts.push({
             text: state.text,
-            x: ko.cx - ko.rx, y: ko.cy - ko.ry / 2, w: 2 * ko.rx, h: ko.ry,
+            x: textArea.x, y: textArea.y, w: textArea.w, h: textArea.h,
             fontPx: state.textPx * (W / 2560), color: state.textColor, bold: true, font: state.textFont
           });
         }
@@ -658,6 +1050,8 @@
     $('fc-clear').addEventListener('click', function () {
       state.photos = []; state.selected = null;
       $('fc-editstep').style.display = 'none';
+      $('fc-photostep').style.display = 'none';
+      $('fc-clusterblock').style.display = 'none';
       $('fc-fileinfo').innerHTML = '';
       $('fc-thumbs').style.display = 'none';
       canvas.style.display = 'none';
@@ -705,8 +1099,45 @@
     bindSlider('fc-bw', 'fc-bw-o', 'borderPct', 0.01, function (v) { return v + '%'; });
     bindSlider('fc-tsize', 'fc-tsize-o', 'textPx', 1, function (v) { return v; });
 
-    $('fc-showtext').addEventListener('change', function (e) { state.showText = e.target.checked; scheduleRender(); });
+    // Layout style switcher
+    $('fc-layoutstyle').addEventListener('change', function (e) {
+      state.layoutStyle = e.target.value;
+      var isGrid = (state.layoutStyle === 'grid');
+      $('fc-grid-opts').style.display = isGrid ? '' : 'none';
+      $('fc-bubble-opts').style.display = isGrid ? 'none' : '';
+      // the middle-space slider only applies to bubbles mode
+      $('fc-hole-field').style.display = isGrid ? 'none' : '';
+      // grid defaults: text off; bubbles: use current showText state
+      if (isGrid) {
+        $('fc-showtext').checked = state.gridShowText;
+        state.showText = state.gridShowText;
+      } else {
+        $('fc-showtext').checked = state.showText;
+      }
+      scheduleRender();
+    });
+    $('fc-gcr').addEventListener('input', function (e) {
+      state.gridCornerRadius = parseFloat(e.target.value);
+      $('fc-gcr-o').textContent = e.target.value + 'px';
+      scheduleRender();
+    });
+
+    $('fc-showtext').addEventListener('change', function (e) {
+      state.showText = e.target.checked;
+      if (state.layoutStyle === 'grid') state.gridShowText = e.target.checked;
+      scheduleRender();
+    });
     $('fc-text').addEventListener('input', function (e) { state.text = e.target.value; state.textDirty = true; scheduleRender(); });
+
+    // ring auto-match checkbox
+    $('fc-bc-automatch').addEventListener('change', function (e) {
+      state.borderAutoMatch = e.target.checked;
+      if (state.borderAutoMatch) {
+        state.borderColor = state.textColor;
+        $('fc-bc').value = state.textColor;
+      }
+      scheduleRender();
+    });
 
     // class presets via home-screen cards (#/faces vs #/faces/persuasion)
 
@@ -734,9 +1165,24 @@
       $('fc-text').value = state.text;
       if (state.photos.length) scheduleRender();
     };
-    $('fc-tcolor').addEventListener('input', function (e) { state.textColor = e.target.value; scheduleRender(); });
+    $('fc-tcolor').addEventListener('input', function (e) {
+      state.textColor = e.target.value;
+      if (state.borderAutoMatch) {
+        state.borderColor = state.textColor;
+        $('fc-bc').value = state.textColor;
+      }
+      scheduleRender();
+    });
     $('fc-tfont').addEventListener('change', function (e) { state.textFont = e.target.value; scheduleRender(); });
-    $('fc-bc').addEventListener('input', function (e) { state.borderColor = e.target.value; scheduleRender(); });
+    $('fc-bc').addEventListener('input', function (e) {
+      state.borderColor = e.target.value;
+      // manually changing ring color turns off auto-match
+      if (e.target.value !== state.textColor) {
+        state.borderAutoMatch = false;
+        $('fc-bc-automatch').checked = false;
+      }
+      scheduleRender();
+    });
     $('fc-bg').addEventListener('input', function (e) { state.bg = e.target.value; scheduleRender(); });
     $('fc-dims').addEventListener('change', function (e) { state.dims = e.target.value; scheduleRender(); });
     $('fc-autoall').addEventListener('click', function () {
@@ -784,7 +1230,11 @@
     module.exports = {
       mulberry32: mulberry32,
       layoutBubbles: layoutBubbles,
-      skinCentroid: skinCentroid
+      skinCentroid: skinCentroid,
+      layoutGrid: layoutGrid,
+      gridGapRect: gridGapRect,
+      defaultMidRows: defaultMidRows,
+      fitText: fitText
     };
   }
 })();

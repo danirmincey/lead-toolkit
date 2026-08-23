@@ -227,7 +227,7 @@
       seed: 20260821, fill: 0.5,
       holePct: 0.34,
       showText: true, text: '', textDirty: false,
-      textPx: 64, textColor: '#2E75B6', textFont: 'Arial',
+      textPx: 64, textColor: '#2E74B5', textFont: 'Corbel',
       bg: '#FFFFFF', dims: '2560x1440',
       searching: false
     };
@@ -245,36 +245,58 @@
       '        <input type="file" id="co-file" accept=".csv,.tsv,.txt,.xlsx,.xlsm,.xltx" style="display:none">' +
       '        <div id="co-fileinfo"></div>' +
       '        <label class="field" id="co-sheetrow" style="display:none">Sheet<select id="co-sheet"></select></label>' +
-      '        <label class="field">Company / employer column<select id="co-col"></select></label>' +
-      '        <label class="field">Filter people <span class="sub">(optional, e.g. clusters)</span><select id="co-filtercol"></select></label>' +
-      '        <div id="co-filtervals"></div>' +
+            '        <div class="clusterblock" id="co-clusterblock" style="display:none">' +
+      '          <div class="clusterlabel">Select cluster(s)</div>' +
+      '          <label class="field">Cluster column<select id="co-filtercol"></select></label>' +
+      '          <div id="co-filtervals"></div>' +
+      '        </div>' +
       '        <div class="row"><button id="co-sample" class="fixed">🎲 Demo data</button></div>' +
       '      </div>' +
       '    </details>' +
 
       '    <details class="step disabled" open id="co-step2">' +
-      '      <summary><span class="n">2</span> Companies & logos <span class="hint" id="co-nhint"></span></summary>' +
+      '      <summary><span class="n">2</span> Column</summary>' +
+      '      <div class="body">' +
+      '        <label class="field">Company / employer column<select id="co-col"></select></label>' +
+      '      </div>' +
+      '    </details>' +
+
+      '    <details class="step disabled" open>' +
+      '      <summary><span class="n">3</span> Companies & logos <span class="hint" id="co-nhint"></span></summary>' +
       '      <div class="body">' +
       '        <div class="row">' +
       '          <button id="co-search" class="primary fixed">🔎 Find logos online</button>' +
       '          <span class="small-note" id="co-progress"></span>' +
       '          <label class="check fixed" style="margin-left:auto"><input type="checkbox" id="co-missing"> Missing only</label>' +
       '        </div>' +
-      '        <div class="small-note"><b>Click any company</b> to open the built-in image search; click a result to use it. Tiny thumbnails on a card are alternates (click to swap). Still missing? 🌐 opens Google in a tab: copy an image, come back, press <b>⌘V</b>. Dropping an image file on a card works too.</div>' +
+      '        <div class="small-note">This is an automatic logo searcher. <b>WARNING: it CAN and WILL go wrong, especially for less famous companies. It requires your close supervision!</b>' +
+      '          <ul class="drop-spec" style="margin:6px 0 0 0;padding-left:18px">' +
+      '            <li><b>Step 1:</b> Click <b>Find logos online</b> and let it fill automatically (searches Wikidata and Wikipedia Commons).</li>' +
+      '            <li><b>Step 2:</b> Wrong or ugly logo? Click the logo card; alternates appear, click one to swap (same sources).</li>' +
+      '            <li><b>Step 3:</b> Still nothing? Click the 🌐 button on the card to open a Google image search in a new tab, copy an image there, come back, and press <b>Cmd or Ctrl V</b> to paste it into the selected card.</li>' +
+      '          </ul>' +
+      '        </div>' +
       '        <div id="co-cards" style="display:flex;flex-direction:column;gap:8px;max-height:520px;overflow:auto"></div>' +
       '      </div>' +
       '    </details>' +
 
       '    <details class="step disabled" open id="co-step3">' +
-      '      <summary><span class="n">3</span> Style</summary>' +
+      '      <summary><span class="n">4</span> Style</summary>' +
       '      <div class="body">' +
       '        <div class="slider-field"><div class="top">Middle space size <output id="co-hole-o">34%</output></div>' +
       '          <input type="range" id="co-hole" min="0" max="80" step="2" value="34"></div>' +
       '        <label class="check"><input type="checkbox" id="co-showtext" checked> Center text</label>' +
       '        <div class="row">' +
       '          <input type="text" id="co-text" placeholder="70 Employers">' +
-      '          <input type="color" id="co-tcolor" value="#2E75B6" class="fixed" style="width:42px">' +
+      '          <input type="color" id="co-tcolor" value="#2E74B5" class="fixed" style="width:42px">' +
       '        </div>' +
+      '        <label class="field">Text font' +
+      '          <select id="co-tfont">' +
+      '            <option value="Corbel" selected>Corbel</option>' +
+      '            <option value="Candara">Candara</option>' +
+      '            <option value="Arial">Arial</option>' +
+      '            <option value="Georgia">Georgia</option>' +
+      '          </select></label>' +
       '        <div class="slider-field"><div class="top">Text size <output id="co-tsize-o">64</output></div>' +
       '          <input type="range" id="co-tsize" min="24" max="160" step="2" value="64"></div>' +
       '        <div class="slider-field"><div class="top">Logo size (density) <output id="co-fill-o">50%</output></div>' +
@@ -417,6 +439,7 @@
       $('co-col').value = String(state.companyCol);
       $('co-filtercol').innerHTML = '<option value="-1">- no filter -</option>' + opts;
       $('co-filtercol').value = String(state.filterCol);
+      $('co-clusterblock').style.display = '';
       buildFilterValues();
       rebuildCompanies();
       ['co-step2', 'co-step3'].forEach(function (s) { $(s).classList.remove('disabled'); });
@@ -435,23 +458,81 @@
         box.innerHTML = '<div class="small-note">⚠ too many values; pick a grouping column.</div>';
         state.includeValues = null; return;
       }
-      if (state.includeValues === null) state.includeValues = new Set(uniq.keys());
+      // cluster-picker doctrine: default to NONE unless exactly one unique value
+      if (state.includeValues === null) {
+        if (uniq.size === 1) {
+          state.includeValues = new Set(uniq.keys());
+        } else {
+          state.includeValues = new Set();
+        }
+      }
+
+      var btnRow = document.createElement('div');
+      btnRow.className = 'row';
+      btnRow.style.marginBottom = '4px';
+      var selAll = document.createElement('button');
+      selAll.className = 'fixed';
+      selAll.textContent = 'Select all';
+      var clrAll = document.createElement('button');
+      clrAll.className = 'fixed';
+      clrAll.textContent = 'Clear all';
+      btnRow.appendChild(selAll);
+      btnRow.appendChild(clrAll);
+      box.appendChild(btnRow);
+
       var list = document.createElement('div');
       list.className = 'value-list';
+
+      function refreshLabels() {
+        Array.prototype.forEach.call(list.querySelectorAll('label'), function (lab) {
+          var inp = lab.querySelector('input');
+          var v2 = inp.getAttribute('data-v');
+          var on = state.includeValues.has(v2);
+          inp.checked = on;
+          lab.className = on ? 'on' : '';
+        });
+      }
+
       Array.from(uniq.keys()).sort().forEach(function (v) {
         var lab = document.createElement('label');
         var on = state.includeValues.has(v);
         lab.className = on ? 'on' : '';
-        lab.innerHTML = '<input type="checkbox" ' + (on ? 'checked' : '') + '> ' +
+        lab.innerHTML = '<input type="checkbox" data-v="' + escapeHtml(v) + '" ' + (on ? 'checked' : '') + '> ' +
           (v === '' ? '(blank)' : escapeHtml(v)) + ' <span class="cnt">' + uniq.get(v) + '</span>';
         lab.querySelector('input').addEventListener('change', function (e) {
           if (e.target.checked) state.includeValues.add(v); else state.includeValues.delete(v);
           lab.className = e.target.checked ? 'on' : '';
+          updateNote();
           rebuildCompanies();
         });
         list.appendChild(lab);
       });
       box.appendChild(list);
+
+      var note = document.createElement('div');
+      note.id = 'co-clusternote';
+      note.className = 'small-note';
+      note.style.marginTop = '4px';
+      box.appendChild(note);
+
+      function updateNote() {
+        note.textContent = (state.includeValues && state.includeValues.size === 0 && uniq.size > 1)
+          ? 'tick your cluster(s) to continue' : '';
+      }
+      updateNote();
+
+      selAll.addEventListener('click', function () {
+        state.includeValues = new Set(uniq.keys());
+        refreshLabels();
+        updateNote();
+        rebuildCompanies();
+      });
+      clrAll.addEventListener('click', function () {
+        state.includeValues = new Set();
+        refreshLabels();
+        updateNote();
+        rebuildCompanies();
+      });
     }
 
     function includedRows() {
@@ -1163,6 +1244,7 @@
     $('co-showtext').addEventListener('change', function (e) { state.showText = e.target.checked; scheduleRender(); });
     $('co-text').addEventListener('input', function (e) { state.text = e.target.value; state.textDirty = true; scheduleRender(); });
     $('co-tcolor').addEventListener('input', function (e) { state.textColor = e.target.value; scheduleRender(); });
+    $('co-tfont').addEventListener('change', function (e) { state.textFont = e.target.value; scheduleRender(); });
     $('co-bg').addEventListener('input', function (e) { state.bg = e.target.value; scheduleRender(); });
     $('co-dims').addEventListener('change', function (e) { state.dims = e.target.value; scheduleRender(); });
 

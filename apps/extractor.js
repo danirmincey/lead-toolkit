@@ -144,16 +144,31 @@
     return { chi2: chi2, p: chi2P1(chi2) };
   }
 
-  // does row 1 hold long question text while row 2 holds short var names?
-  function detectVarNameRow(row0, row1) {
-    if (!row1) return 0;
-    var avg = function (r) {
-      var s = 0, k = 0;
-      r.forEach(function (c) { if (c) { s += String(c).length; k++; } });
-      return k ? s / k : 0;
-    };
-    var shortish = row1.filter(function (c) { return /^[\w.()\- ]{1,24}$/.test(String(c).trim()); }).length;
-    if (avg(row0) > 35 && avg(row1) < 22 && shortish >= row1.length * 0.7) return 1;
+  /* which of the first FOUR rows holds the short variable names?
+     Scores each row: +1 per cell matching short-name shape (no ImportId),
+     -3 per cell containing ImportId, -2 per cell longer than 60 chars;
+     header = earliest row scoring >= 0.9 * max. Accepts either the whole
+     raw array of rows, or the legacy (row0, row1) call shape. */
+  function detectVarNameRow(rows, legacyRow1) {
+    if (!rows || !rows.length) return 0;
+    if (!Array.isArray(rows[0])) rows = legacyRow1 ? [rows, legacyRow1] : [rows];
+    var scores = [], max = -Infinity, ri, ci;
+    var lim = Math.min(4, rows.length);
+    for (ri = 0; ri < lim; ri++) {
+      var row = rows[ri] || [], s = 0;
+      for (ci = 0; ci < row.length; ci++) {
+        var cell = String(row[ci] === undefined || row[ci] === null ? '' : row[ci]);
+        var hasImport = cell.indexOf('ImportId') !== -1;
+        if (!hasImport && /^[A-Za-z][\w .()-]{0,28}$/.test(cell)) s += 1;
+        if (hasImport) s -= 3;
+        if (cell.length > 60) s -= 2;
+      }
+      scores.push(s);
+      if (s > max) max = s;
+    }
+    for (ri = 0; ri < scores.length; ri++) {
+      if (scores[ri] >= 0.9 * max) return ri;
+    }
     return 0;
   }
 
@@ -264,15 +279,13 @@
       '        <div class="dropzone" id="dx-drop"><strong>DROP DATA HERE</strong><ul class="drop-spec"><li><b>Type of file:</b> CSV or Excel (.xlsx)</li><li><b>What you\'re looking for:</b> ' + P.want + '</li></ul></div>' +
       '        <input type="file" id="dx-file" accept=".csv,.tsv,.txt,.xlsx,.xlsm,.xltx" style="display:none">' +
       '        <div id="dx-fileinfo"></div>' +
-      '        <div class="row"><button id="dx-demo" class="fixed">🎲 Demo data</button></div>' +
       '        <label class="field" id="dx-sheetrow" style="display:none">Sheet<select id="dx-sheet"></select></label>' +
-      '        <label class="field" id="dx-headrow" style="display:none">Variable names are in' +
-      '          <select id="dx-headsel">' +
-      '            <option value="0">Row 1</option>' +
-      '            <option value="1">Row 2 (row 1 = question text)</option>' +
-      '          </select></label>' +
-      '        <label class="field">Filter people <span class="sub">(optional, e.g. cluster)</span><select id="dx-filtercol"></select></label>' +
-      '        <div id="dx-filtervals"></div>' +
+      '        <div class="clusterblock" id="dx-filterblock" style="display:none">' +
+      '          <div class="clusterlabel">Select cluster(s)</div>' +
+      '          <label class="field">Cluster column<select id="dx-filtercol"></select></label>' +
+      '          <div id="dx-filtervals"></div>' +
+      '        </div>' +
+      '        <div class="row"><button id="dx-demo" class="fixed">🎲 Demo data</button></div>' +
       '      </div>' +
       '    </details>' +
 
@@ -408,13 +421,12 @@
       }
       state.raw = raw;
       state.fileName = name;
-      state.headerRow = detectVarNameRow(raw[0], raw[1]);
-      $('dx-headrow').style.display = '';
-      $('dx-headsel').value = String(state.headerRow);
+      state.headerRow = detectVarNameRow(raw);
       applyHeaderChoice();
+      $('dx-filterblock').style.display = '';
       $('dx-fileinfo').innerHTML = '<span class="file-info">✓ ' + escapeHtml(name) + ' · ' +
         state.rows.length + ' responses × ' + state.headers.length + ' columns' +
-        (state.headerRow === 1 ? ' · variable names taken from row 2' : '') + '</span>';
+        (state.headerRow > 0 ? ' · variable names taken from row ' + (state.headerRow + 1) : '') + '</span>';
       $('dx-fhint').textContent = name;
       $('dx-step2').classList.remove('disabled');
     }
@@ -422,16 +434,27 @@
     function applyHeaderChoice() {
       var hr = state.headerRow;
       state.headers = dedupeHeaders(state.raw[hr]);
-      state.qtexts = hr === 1 ? state.raw[0].map(String) : state.raw[hr].map(String);
+      // question texts live in the longest-celled row ABOVE the header (if any)
+      var qRow = -1, qAvg = 0;
+      for (var ri = 0; ri < hr; ri++) {
+        var s = 0, k = 0;
+        state.raw[ri].forEach(function (c) {
+          var t = String(c === undefined || c === null ? '' : c);
+          if (t) { s += t.length; k++; }
+        });
+        var a = k ? s / k : 0;
+        if (a > qAvg && state.raw[ri].join(' ').indexOf('ImportId') === -1) { qAvg = a; qRow = ri; }
+      }
+      state.qtexts = (qRow >= 0 ? state.raw[qRow] : state.raw[hr]).map(String);
       state.rows = state.raw.slice(hr + 1);
-      // drop Qualtrics question-text / ImportId rows lurking under the header
-      // (question-text rows are long in MOST cells; data rows only in a few)
+      // drop leftover Qualtrics rows under the header: any ImportId row, plus
+      // qtext-like rows among the next 2 (>40% of non-empty cells over 40 chars)
       var dropped = 0;
       while (state.rows.length && dropped < 2) {
+        if (state.rows[0].join(' ').indexOf('ImportId') !== -1) { state.rows.shift(); continue; }
         var cells = state.rows[0].filter(function (c) { return String(c).trim(); });
         var longs = cells.filter(function (c) { return String(c).length > 40; }).length;
-        if (state.rows[0].join(' ').indexOf('"ImportId"') !== -1 ||
-            (cells.length >= 3 && longs / cells.length > 0.5)) { state.rows.shift(); dropped++; }
+        if (cells.length && longs / cells.length > 0.4) { state.rows.shift(); dropped++; }
         else break;
       }
       state.filterCol = state.headers.findIndex(function (h, i) {
@@ -463,7 +486,25 @@
         uniq.set(v, (uniq.get(v) || 0) + 1);
       });
       if (uniq.size > 40) { box.innerHTML = '<div class="small-note">⚠ too many values in that column.</div>'; state.includeValues = null; return; }
-      if (state.includeValues === null) state.includeValues = new Set(uniq.keys());
+      // cluster doctrine: NOTHING ticked by default; auto-tick a lone value
+      if (state.includeValues === null) {
+        state.includeValues = new Set();
+        if (uniq.size === 1) uniq.forEach(function (n, v) { state.includeValues.add(v); });
+      }
+      var btns = document.createElement('div');
+      btns.className = 'row';
+      btns.innerHTML = '<button type="button" class="fixed">Select all</button>' +
+        '<button type="button" class="fixed">Clear all</button>';
+      var bs = btns.querySelectorAll('button');
+      bs[0].addEventListener('click', function () {
+        uniq.forEach(function (n, v) { state.includeValues.add(v); });
+        buildFilterValues(); refresh();
+      });
+      bs[1].addEventListener('click', function () {
+        state.includeValues.clear();
+        buildFilterValues(); refresh();
+      });
+      box.appendChild(btns);
       var list = document.createElement('div');
       list.className = 'value-list';
       Array.from(uniq.keys()).sort().forEach(function (v) {
@@ -703,11 +744,24 @@
         }
       }
       L.push('');
-      L.push('- generated by LEAD Toolkit · all processing local -');
+      L.push('- generated by LEAD Toolkit -');
       return L.join('\n');
     }
 
     function refresh() {
+      var empty = $('dx-empty');
+      // cluster doctrine: with a filter column and nothing ticked, show the
+      // nudge instead of stats
+      if (state.rows.length && state.filterCol >= 0 &&
+          state.includeValues !== null && state.includeValues.size === 0) {
+        $('dx-out').style.display = 'none';
+        empty.textContent = 'tick your cluster(s) above to continue';
+        empty.style.display = '';
+        $('dx-copy').disabled = true;
+        $('dx-status').textContent = '';
+        return;
+      }
+      empty.textContent = 'output displayed HERE';
       var report = null;
       try { report = buildReport(); } catch (e) { report = 'Something went wrong: ' + (e.message || e); }
       var out = $('dx-out');
@@ -746,12 +800,6 @@
     drop.addEventListener('drop', function (e) { if (e.dataTransfer.files[0]) loadFile(e.dataTransfer.files[0]); });
 
     $('dx-sheet').addEventListener('change', function (e) { useSheet(+e.target.value); });
-    $('dx-headsel').addEventListener('change', function (e) {
-      state.headerRow = +e.target.value;
-      applyHeaderChoice();
-      $('dx-fileinfo').innerHTML = '<span class="file-info">✓ ' + escapeHtml(state.fileName) + ' · ' +
-        state.rows.length + ' responses × ' + state.headers.length + ' columns</span>';
-    });
     $('dx-filtercol').addEventListener('change', function (e) {
       state.filterCol = +e.target.value; state.includeValues = null; buildFilterValues(); refresh();
     });
@@ -760,14 +808,19 @@
     $('dx-demo').addEventListener('click', function () {
       var head = ['Cluster', 'anchoring30k', 'anchoring80k', 'gainframe', 'lossframe', 'bta_decmaking', 'bta_intelligence', 'bta_driving'];
       var raw = [head];
+      // framing flip like the real slides, deterministic (index patterns):
+      // gainframe ~72% Plan A / 28% Plan B; lossframe ~58% Plan B / 42% Plan A
       for (var i = 0; i < 60; i++) {
-        var low = i % 2 === 0;
+        var low = i % 2 === 0;          // even rows: 30k anchor + gainframe
+        var half = Math.floor(i / 2);   // 0..29 within each frame
+        var gainPick = ((half * 4) % 15) >= 11 ? 'Plan B' : 'Plan A';  // 22 A / 8 B
+        var lossPick = ((half * 7) % 30) < 17 ? 'Plan B' : 'Plan A';   // 17 B / 13 A
         raw.push([
           'Cluster H - Demo',
           low ? String(28000 + (i % 7) * 2000) : '',
           low ? '' : String(52000 + (i % 7) * 5000),
-          i % 3 === 0 ? 'Plan A' : (low ? '' : 'Plan B'),
-          i % 3 === 0 ? '' : (low ? 'Plan B' : ''),
+          low ? gainPick : '',
+          low ? '' : lossPick,
           String(40 + ((i * 7) % 55)), String(45 + ((i * 11) % 50)), String(50 + ((i * 5) % 45))
         ]);
       }

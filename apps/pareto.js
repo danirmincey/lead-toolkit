@@ -134,7 +134,7 @@
     var state = {
       headers: [], rows: [], fileName: null, _sheets: null,
       cols: null,                 // located survey columns
-      clusterVals: [], cluster: '',
+      clusterVals: [], includeClusters: null,
       clusterLabel: '', title: 'Abhas-Bussan Pareto Optimal Frontier',
       pay: defaultPay(),
       groups: []
@@ -152,16 +152,17 @@
       '        <div class="dropzone" id="pf-drop"><strong>DROP DATA HERE</strong><ul class="drop-spec"><li><b>Type of file:</b> CSV or Excel (.xlsx)</li><li><b>What you\'re looking for:</b> the "07 Negotiation Outcomes" Qualtrics export (one response per negotiating group)</li></ul></div>' +
       '        <input type="file" id="pf-file" accept=".csv,.tsv,.txt,.xlsx,.xlsm,.xltx" style="display:none">' +
       '        <div id="pf-fileinfo"></div>' +
-      '        <label class="field">Cluster<select id="pf-cluster"><option value="">- load the survey first -</option></select></label>' +
-      '        <div class="row">' +
-      '          <button id="pf-import" class="fixed" disabled>⤵ Import groups</button>' +
-      '          <button id="pf-example" class="fixed">🎲 Demo data</button>' +
+      '        <label class="field" id="pf-sheetrow" style="display:none">Sheet<select id="pf-sheet"></select></label>' +
+      '        <div class="clusterblock" id="pf-clusterblock" style="display:none">' +
+      '          <div class="clusterlabel">Select cluster(s)</div>' +
+      '          <div id="pf-filtervals"></div>' +
+      '          <div class="small-note">Ticking a cluster imports its groups into the editable table. Codes are mapped best-effort; CHECK every row against the deal sheets.</div>' +
       '        </div>' +
-      '        <div class="small-note">Importing replaces the table below. Codes are mapped best-effort; CHECK every row against the deal sheets.</div>' +
+      '        <div class="row"><button id="pf-example" class="fixed">🎲 Demo data</button></div>' +
       '      </div>' +
       '    </details>' +
 
-      '    <details class="step" open>' +
+      '    <details class="step" open id="pf-step2" style="display:none">' +
       '      <summary><span class="n">2</span> Labels</summary>' +
       '      <div class="body">' +
       '        <label class="field">Cluster label <span class="sub">(for the slide title)</span><input type="text" id="pf-label" placeholder="H"></label>' +
@@ -169,7 +170,7 @@
       '      </div>' +
       '    </details>' +
 
-      '    <details class="step">' +
+      '    <details class="step" id="pf-step3" style="display:none">' +
       '      <summary><span class="n">3</span> Scoring tables <span class="hint">(advanced)</span></summary>' +
       '      <div class="body">' +
       '        <div class="small-note">Derived from the DRRC workbook and verified against the slides. India / Yen / Rupee never appear in the materials, so they sit at 0; edit if a group picked them.</div>' +
@@ -186,6 +187,7 @@
       '      <button id="pf-add" class="fixed">＋ Add group</button>' +
       '      <span class="status" id="pf-status"></span>' +
       '    </div>' +
+      '    <div id="pf-results"></div>' +
       '    <div id="pf-tablewrap" class="grp-table" style="overflow:auto;max-height:44vh"></div>' +
       '    <div class="canvas-holder" style="background:#fff">' +
       '      <div class="empty-msg" id="pf-empty">output displayed HERE</div>' +
@@ -230,15 +232,24 @@
       return rows.filter(function (r) { return r.some(function (x) { return x !== ''; }); });
     }
 
+    // Qualtrics raw exports: row0 names, row1 question text, row2 ImportId.
+    // Drop EVERY early row that is qtext-like or carries ImportId JSON, not
+    // just a leading run (the outcomes export tripped the old heuristic and
+    // question text became "groups").
     function stripJunkRows(rows) {
-      var out = rows.slice(1), dropped = 0;
-      while (out.length && dropped < 2) {
-        var cells = out[0].filter(function (c) { return String(c).trim(); });
-        var longs = cells.filter(function (c) { return String(c).length > 40; }).length;
-        if (out[0].join(' ').indexOf('"ImportId"') !== -1 ||
-            (cells.length >= 3 && longs / cells.length > 0.5)) { out.shift(); dropped++; }
-        else break;
-      }
+      var out = [], dropped = 0;
+      rows.slice(1).forEach(function (r, i) {
+        var joined = r.join(' ');
+        if (joined.indexOf('"ImportId"') !== -1) { dropped++; return; }
+        if (i < 3) {
+          var cells = r.filter(function (c) { return String(c).trim(); });
+          var longs = cells.filter(function (c) { return String(c).length > 40; }).length;
+          if (cells.length >= 3 && longs / cells.length > 0.4) { dropped++; return; }
+          // qtext rows in THIS survey are recognizably instructional
+          if (/please list all the people|which cluster are you in/i.test(joined)) { dropped++; return; }
+        }
+        out.push(r);
+      });
       return { headers: rows[0], rows: out, dropped: dropped };
     }
 
@@ -249,12 +260,16 @@
           return window.parseXlsx(buf).then(function (sheets) {
             sheets = sheets.filter(function (s) { return s.rows.length; });
             if (!sheets.length) throw new Error('the workbook has no data');
-            var s = sheets[0];
-            loadRaw(s.rows.map(function (r) {
-              return r.map(function (c) { return c === null || c === undefined ? '' : String(c); });
-            }), file.name);
+            state._sheets = sheets; state.fileName = file.name;
+            $('pf-sheet').innerHTML = sheets.map(function (s, i) {
+              return '<option value="' + i + '">' + escapeHtml(s.name || ('Sheet ' + (i + 1))) + '</option>';
+            }).join('');
+            $('pf-sheetrow').style.display = sheets.length > 1 ? '' : 'none';
+            useSheet(0);
           });
         }
+        state._sheets = null;
+        $('pf-sheetrow').style.display = 'none';
         loadRaw(parseCSVText(new TextDecoder(sniffEncoding(buf)).decode(buf)), file.name);
       }).catch(function (err) {
         $('pf-fileinfo').innerHTML = '<span class="file-warn">Could not read file: ' + (err.message || err) + '</span>';
@@ -304,27 +319,155 @@
         });
       }
       state.clusterVals = Array.from(uniq.keys()).sort(function (a, b) { return a.localeCompare(b, undefined, { numeric: true }); });
-      $('pf-cluster').innerHTML = '<option value="">(all responses)</option>' + state.clusterVals.map(function (v) {
-        return '<option value="' + escapeHtml(v) + '">' + escapeHtml(v) + ' (' + uniq.get(v) + ')</option>';
-      }).join('');
-      $('pf-import').disabled = false;
+      state.includeClusters = null;
+      buildClusterVals(uniq);
+      $('pf-clusterblock').style.display = '';
       $('pf-fileinfo').innerHTML = '<span class="file-info">✓ ' + escapeHtml(name) + ' · ' + state.rows.length + ' responses</span>';
       $('pf-fhint').textContent = name;
+      importGroups();
+    }
+
+    function useSheet(i) {
+      var s = state._sheets[i];
+      loadRaw(s.rows.map(function (r) {
+        return r.map(function (c) { return c === null || c === undefined ? '' : String(c); });
+      }), state.fileName + (state._sheets.length > 1 ? ' · ' + (s.name || '') : ''));
+    }
+
+    // real negotiating rows only: husks (no names, no agreement, no terms)
+    // never count toward clusters or groups
+    function isRealRow(r) {
+      var c = state.cols;
+      var join = function (idxs) {
+        return idxs.map(function (i) { return String(r[i] === undefined ? '' : r[i]).trim(); })
+          .filter(Boolean).join('; ');
+      };
+      var namesA = join(c.abhas), namesB = join(c.bussan);
+      var agree = c.agree !== -1 ? String(r[c.agree] === undefined ? '' : r[c.agree]).trim() : '';
+      var anyTerm = [c.price, c.excl, c.profit, c.dispute, c.currency].some(function (ci) {
+        return ci !== -1 && String(r[ci] === undefined ? '' : r[ci]).trim() !== '';
+      });
+      return !!(namesA || namesB || agree || anyTerm);
+    }
+
+    function buildClusterVals(uniqAll) {
+      var box = $('pf-filtervals');
+      box.innerHTML = '';
+      var c = state.cols;
+      if (!c || c.cluster === -1) {
+        box.innerHTML = '<div class="small-note">(no cluster column found in this file; importing every response)</div>';
+        state.includeClusters = null;
+        return;
+      }
+      // count clusters over REAL rows only, so husks don't pollute the list
+      var uniq = new Map();
+      state.rows.forEach(function (r) {
+        if (!isRealRow(r)) return;
+        var v = String(r[c.cluster] === undefined ? '' : r[c.cluster]).trim();
+        uniq.set(v, (uniq.get(v) || 0) + 1);
+      });
+      if (!uniq.size) {
+        box.innerHTML = '<div class="small-note">(no cluster values found; importing every response)</div>';
+        state.includeClusters = null;
+        return;
+      }
+
+      // cluster-picker doctrine: default to NONE unless exactly one unique value
+      if (state.includeClusters === null) {
+        state.includeClusters = uniq.size === 1 ? new Set(uniq.keys()) : new Set();
+      }
+
+      var btnRow = document.createElement('div');
+      btnRow.className = 'row';
+      btnRow.style.marginBottom = '4px';
+      var selAll = document.createElement('button');
+      selAll.className = 'fixed';
+      selAll.textContent = 'Select all';
+      var clrAll = document.createElement('button');
+      clrAll.className = 'fixed';
+      clrAll.textContent = 'Clear all';
+      btnRow.appendChild(selAll);
+      btnRow.appendChild(clrAll);
+      box.appendChild(btnRow);
+
+      var list = document.createElement('div');
+      list.className = 'value-list';
+
+      function refreshLabels() {
+        Array.prototype.forEach.call(list.querySelectorAll('label'), function (lab) {
+          var inp = lab.querySelector('input');
+          var on = state.includeClusters.has(inp.getAttribute('data-v'));
+          inp.checked = on;
+          lab.className = on ? 'on' : '';
+        });
+      }
+
+      Array.from(uniq.keys()).sort(function (a, b) { return a.localeCompare(b, undefined, { numeric: true }); }).forEach(function (v) {
+        var lab = document.createElement('label');
+        var on = state.includeClusters.has(v);
+        lab.className = on ? 'on' : '';
+        lab.innerHTML = '<input type="checkbox" data-v="' + escapeHtml(v) + '" ' + (on ? 'checked' : '') + '> ' +
+          (v === '' ? '(blank)' : escapeHtml(v)) + ' <span class="cnt">' + uniq.get(v) + '</span>';
+        lab.querySelector('input').addEventListener('change', function (e) {
+          if (e.target.checked) state.includeClusters.add(v); else state.includeClusters.delete(v);
+          lab.className = e.target.checked ? 'on' : '';
+          updateNote();
+          importGroups();
+        });
+        list.appendChild(lab);
+      });
+      box.appendChild(list);
+
+      var note = document.createElement('div');
+      note.id = 'pf-clusternote';
+      note.className = 'small-note';
+      note.style.marginTop = '4px';
+      box.appendChild(note);
+
+      function updateNote() {
+        note.textContent = (state.includeClusters && state.includeClusters.size === 0 && uniq.size > 1)
+          ? 'tick your cluster(s) to continue' : '';
+      }
+      updateNote();
+
+      selAll.addEventListener('click', function () {
+        state.includeClusters = new Set(uniq.keys());
+        refreshLabels();
+        updateNote();
+        importGroups();
+      });
+      clrAll.addEventListener('click', function () {
+        state.includeClusters = new Set();
+        refreshLabels();
+        updateNote();
+        importGroups();
+      });
     }
 
     function importGroups() {
       var c = state.cols;
       if (!c) return;
       var rows = state.rows;
-      if (state.cluster && c.cluster !== -1) {
-        rows = rows.filter(function (r) { return String(r[c.cluster] === undefined ? '' : r[c.cluster]).trim() === state.cluster; });
+      if (c.cluster !== -1 && state.clusterVals.length && state.includeClusters) {
+        rows = rows.filter(function (r) {
+          return state.includeClusters.has(String(r[c.cluster] === undefined ? '' : r[c.cluster]).trim());
+        });
       }
       var join = function (r, idxs) {
         return idxs.map(function (i) { return String(r[i] === undefined ? '' : r[i]).trim(); })
           .filter(Boolean).join('; ');
       };
-      state.groups = rows.map(function (r) {
-        var impasse = c.agree !== -1 && String(r[c.agree]).trim() === '2';
+      state.groups = [];
+      rows.forEach(function (r) {
+        var namesA = join(r, c.abhas), namesB = join(r, c.bussan);
+        var agree = c.agree !== -1 ? String(r[c.agree]).trim() : '';
+        var anyTerm = [c.price, c.excl, c.profit, c.dispute, c.currency].some(function (ci) {
+          return ci !== -1 && String(r[ci] === undefined ? '' : r[ci]).trim() !== '';
+        });
+        // half-filled husk responses (no names, no agreement, no terms)
+        // must NOT become groups
+        if (!namesA && !namesB && !agree && !anyTerm) return;
+        var impasse = agree === '2';
         var terms = impasse ? { price: '', excl: '', profit: '', dispute: '', currency: '' } : {
           price: normPrice(r[c.price]),
           excl: normExcl(r[c.excl]),
@@ -333,20 +476,43 @@
           currency: normCurrency(r[c.currency])
         };
         var g = {
-          abhas: join(r, c.abhas), bussan: join(r, c.bussan),
+          num: state.groups.length + 1,
+          abhas: namesA, bussan: namesB,
           price: terms.price, excl: terms.excl, profit: terms.profit,
           dispute: terms.dispute, currency: terms.currency, aOut: '', bOut: ''
         };
         var out = computeOutcome(terms, state.pay);
         if (out) { g.aOut = String(out.a); g.bOut = String(out.b); }
-        return g;
+        state.groups.push(g);
       });
-      if (!state.clusterLabel && state.cluster) {
-        state.clusterLabel = state.cluster;
-        $('pf-label').value = state.cluster;
+      if (!state.clusterLabel && state.includeClusters && state.includeClusters.size === 1) {
+        state.clusterLabel = Array.from(state.includeClusters)[0];
+        $('pf-label').value = state.clusterLabel;
       }
       buildTable();
       scheduleRender();
+      updateDisclosure();
+    }
+
+    // progressive disclosure: nothing past step 1 shows until groups exist
+    function updateDisclosure() {
+      var has = state.groups.length > 0;
+      $('pf-step2').style.display = has ? '' : 'none';
+      $('pf-step3').style.display = has ? '' : 'none';
+      $('pf-add').style.display = has ? '' : 'none';
+      if (!has) {
+        $('pf-results').innerHTML = '';
+        $('pf-tablewrap').innerHTML = '';
+        canvas.style.display = 'none';
+        $('pf-empty').style.display = '';
+        $('pf-empty').textContent = (state.rows.length && state.clusterVals.length > 1 &&
+          state.includeClusters && state.includeClusters.size === 0)
+          ? 'tick your cluster(s) above to continue' : 'output displayed HERE';
+        $('pf-png').disabled = true;
+        $('pf-deck').disabled = true;
+        $('pf-copy').disabled = true;
+        $('pf-status').textContent = '';
+      }
     }
 
     // last year's Cluster H terms (real names replaced with the invented
@@ -373,8 +539,8 @@
         [NAMES(66), NAMES(69), '10', 'Y', '40', 'Canada', 'CAD'],
         [NAMES(72), NAMES(75), '10', 'N', '40', 'Canada', 'CAD']
       ];
-      state.groups = ex.map(function (e) {
-        var g = { abhas: e[0], bussan: e[1], price: e[2], excl: e[3], profit: e[4], dispute: e[5], currency: e[6], aOut: '', bOut: '' };
+      state.groups = ex.map(function (e, gi) {
+        var g = { num: gi + 1, abhas: e[0], bussan: e[1], price: e[2], excl: e[3], profit: e[4], dispute: e[5], currency: e[6], aOut: '', bOut: '' };
         var out = computeOutcome(g, state.pay);
         if (out) { g.aOut = String(out.a); g.bOut = String(out.b); }
         return g;
@@ -383,6 +549,7 @@
       $('pf-label').value = state.clusterLabel;
       buildTable();
       scheduleRender();
+      updateDisclosure();
     }
 
     /* ---------- editable table ---------- */
@@ -413,15 +580,19 @@
     function buildTable() {
       var wrap = $('pf-tablewrap');
       if (!state.groups.length) { wrap.innerHTML = ''; return; }
-      var html = '<table><thead><tr><th></th><th>Abhas</th><th>Bussan</th>' +
+      var html = '<div class="small-note">Group numbers come from the Group Selector, NOT submission order: edit the G# boxes (or move rows with ⭡⭣) so they match the class assignment.</div>' +
+        '<table><thead><tr><th>G#</th><th></th><th>Abhas</th><th>Bussan</th>' +
         '<th>Price</th><th>Excl.</th><th>Profit</th><th>Dispute</th><th>Currency</th>' +
         '<th>Abhas out.</th><th>Bussan out.</th><th>Joint</th><th>Pareto</th><th></th></tr></thead><tbody>';
       state.groups.forEach(function (g, gi) {
+        if (g.num === undefined) g.num = gi + 1;
         var a = parseFloat(g.aOut), b = parseFloat(g.bOut);
         var joint = (isFinite(a) && isFinite(b)) ? a + b : '';
-        var opt = (isFinite(a) && isFinite(b)) ? (isOptimal(a, b) ? '✓' : '✗') : '';
+        var opt = (isFinite(a) && isFinite(b)) ? ((impasseRow(g) ? '' : (isOptimal(a, b) ? '✓' : '✗'))) : '';
         html += '<tr data-row="' + gi + '" style="background:' + rowTone(g) + '">' +
-          '<td style="font-weight:700;white-space:nowrap">G' + String(gi + 1).padStart(2, '0') + '</td>' +
+          '<td><input type="number" min="1" data-g="' + gi + '" data-k="num" value="' + g.num + '" style="width:52px;font-weight:700"></td>' +
+          '<td style="white-space:nowrap"><button class="fixed" data-up="' + gi + '" title="move row up">⭡</button>' +
+          '<button class="fixed" data-down="' + gi + '" title="move row down">⭣</button></td>' +
           '<td><input type="text" data-g="' + gi + '" data-k="abhas" value="' + escapeHtml(g.abhas) + '" style="width:150px"></td>' +
           '<td><input type="text" data-g="' + gi + '" data-k="bussan" value="' + escapeHtml(g.bussan) + '" style="width:150px"></td>' +
           '<td>' + termSelect(gi, 'price') + '</td>' +
@@ -450,7 +621,12 @@
       Array.prototype.forEach.call(wrap.querySelectorAll('input[data-g]'), function (inp) {
         inp.addEventListener('input', function () {
           var gi = +inp.getAttribute('data-g');
-          state.groups[gi][inp.getAttribute('data-k')] = inp.value;
+          var k = inp.getAttribute('data-k');
+          if (k === 'num') {
+            state.groups[gi].num = parseInt(inp.value, 10) || (gi + 1);
+            return;
+          }
+          state.groups[gi][k] = inp.value;
           if (inp.type === 'number') refreshRow(gi);
           scheduleRender();
         });
@@ -462,6 +638,31 @@
           scheduleRender();
         });
       });
+      Array.prototype.forEach.call(wrap.querySelectorAll('button[data-up]'), function (btn) {
+        btn.addEventListener('click', function () {
+          var gi = +btn.getAttribute('data-up');
+          if (gi === 0) return;
+          var t = state.groups[gi - 1];
+          state.groups[gi - 1] = state.groups[gi];
+          state.groups[gi] = t;
+          buildTable();
+        });
+      });
+      Array.prototype.forEach.call(wrap.querySelectorAll('button[data-down]'), function (btn) {
+        btn.addEventListener('click', function () {
+          var gi = +btn.getAttribute('data-down');
+          if (gi >= state.groups.length - 1) return;
+          var t = state.groups[gi + 1];
+          state.groups[gi + 1] = state.groups[gi];
+          state.groups[gi] = t;
+          buildTable();
+        });
+      });
+    }
+
+    function impasseRow(g) {
+      return !g.price && !g.excl && !g.profit && !g.dispute && !g.currency &&
+        (g.abhas || g.bussan) && g.aOut === '' && g.bOut === '';
     }
 
     function refreshRow(gi) {
@@ -605,6 +806,7 @@
       });
 
       var s = summarize(state.groups);
+      renderResults(s);
       $('pf-png').disabled = false;
       $('pf-deck').disabled = false;
       $('pf-copy').disabled = false;
@@ -613,12 +815,26 @@
         ' · reached ' + s.reached + '/' + s.total;
     }
 
+    // the slide-3 numbers, visible IN the app (not only in the deck)
+    function renderResults(s) {
+      $('pf-results').innerHTML =
+        '<div class="pf-sumwrap">' +
+        '  <div class="small-note">Averages cover the ' + s.n + ' groups with a recorded deal; impasse groups count in the totals below. (The old class slide averaged 13 rows INCLUDING a since-corrected entry for the no-deal group, which is why it shows 79.00 / 80.54.)</div>' +
+        '  <table class="pf-sum"><tr><th>Avg Abhas Outcome</th><th>Avg Bussan Outcome</th></tr>' +
+        '  <tr><td>' + (isFinite(s.avgA) ? s.avgA.toFixed(2) : '-') + '</td><td>' +
+             (isFinite(s.avgB) ? s.avgB.toFixed(2) : '-') + '</td></tr></table>' +
+        '  <table class="pf-sum"><tr><th>% Reached Pareto Frontier</th><th>% Did Not Reach</th></tr>' +
+        '  <tr><td>' + s.pctReached + '% (' + s.reached + '/' + s.total + ')</td><td>' +
+             s.pctMissed + '% (' + s.missed + '/' + s.total + ')</td></tr></table>' +
+        '</div>';
+    }
+
     /* ---------- exports ---------- */
 
     function buildDeck(cb) {
       var CW = 2560, CH = 1440;
       var BLUE = '#2E74B5', HEADER = '#4472C4', BAND = '#D9E2F3';
-      var label = state.clusterLabel || state.cluster || '';
+      var label = state.clusterLabel || '';
       var slideTitle = 'Results for Cluster ' + label;
 
       function title(text) {
@@ -639,10 +855,47 @@
           var boxW = 2000, boxH = 1180, scale = Math.min(boxW / canvas.width, boxH / canvas.height);
           var iw = canvas.width * scale, ih = canvas.height * scale;
           var s = summarize(state.groups);
+          // per-group table slide, non-optimal rows in the class-deck yellow
+          var HEAD2 = ['', 'Abhas', 'Bussan', 'Price', 'Excl.', 'Profit', 'Dispute', 'Currency', 'Abhas', 'Bussan', 'Joint'];
+          function tcell(text, fill, opts) {
+            opts = opts || {};
+            return { fill: fill, paras: [{ runs: [{ text: String(text), bold: !!opts.bold, color: '#000000' }], sizePx: opts.size || 22, align: 'ctr' }] };
+          }
+          var grpRows = [{ h: 70, cells: HEAD2.map(function (t) { return tcell(t, '#D9E2F3', { bold: true, size: 24 }); }) }];
+          state.groups.forEach(function (g, gi) {
+            var a = parseFloat(g.aOut), b = parseFloat(g.bOut);
+            var ok = isFinite(a) && isFinite(b) && isOptimal(a, b);
+            var fill = (isFinite(a) && isFinite(b)) ? (ok ? '#EDF1F8' : '#FFE699') : '#FFF6DC';
+            grpRows.push({
+              h: 74,
+              cells: [
+                tcell('Group ' + String(g.num || gi + 1).padStart(2, '0'), fill, { bold: true }),
+                tcell(g.abhas || '', fill, { size: 16 }),
+                tcell(g.bussan || '', fill, { size: 16 }),
+                tcell(g.price ? TERMS.price.show[g.price] : '-', fill),
+                tcell(g.excl ? TERMS.excl.show[g.excl] : '-', fill),
+                tcell(g.profit ? TERMS.profit.show[g.profit] : '-', fill),
+                tcell(g.dispute || '-', fill),
+                tcell(g.currency || '-', fill),
+                tcell(isFinite(a) ? a : '-', fill),
+                tcell(isFinite(b) ? b : '-', fill),
+                tcell(isFinite(a) && isFinite(b) ? a + b : '-', fill, { bold: true })
+              ]
+            });
+          });
           var slides = [
             {
               texts: [title(slideTitle)],
               images: [{ bytes: img, ext: 'png', x: (CW - iw) / 2, y: 200 + (boxH - ih) / 2, w: iw, h: ih, shape: 'rect', name: 'frontier' }]
+            },
+            {
+              texts: [title(slideTitle + ' | outcomes by group')],
+              tables: [{
+                x: 60, y: 190,
+                colWidths: [180, 420, 420, 170, 130, 150, 240, 170, 170, 170, 160],
+                border: { color: '#FFFFFF', w: 2 }, font: 'Candara',
+                rows: grpRows.slice(0, 15)   // 14 groups fit; more go to copy text
+              }]
             },
             {
               texts: [title(slideTitle)],
@@ -684,7 +937,7 @@
     });
     $('pf-copy').addEventListener('click', function () {
       var s = summarize(state.groups);
-      var L = ['ABHAS-BUSSAN | Cluster ' + (state.clusterLabel || state.cluster || '')];
+      var L = ['ABHAS-BUSSAN | Cluster ' + (state.clusterLabel || '')];
       L.push('Avg Abhas outcome: ' + (isFinite(s.avgA) ? s.avgA.toFixed(2) : '-'));
       L.push('Avg Bussan outcome: ' + (isFinite(s.avgB) ? s.avgB.toFixed(2) : '-'));
       L.push('Reached Pareto frontier: ' + s.pctReached + '% (' + s.reached + '/' + s.total + ')');
@@ -692,7 +945,7 @@
       state.groups.forEach(function (g, gi) {
         var a = parseFloat(g.aOut), b = parseFloat(g.bOut);
         var tag = (isFinite(a) && isFinite(b)) ? (a + ' / ' + b + ' = ' + (a + b) + (isOptimal(a, b) ? '  ✓ optimal' : '  ✗') ) : 'no deal recorded';
-        L.push('G' + String(gi + 1).padStart(2, '0') + ': ' + tag);
+        L.push('G' + String(g.num || gi + 1).padStart(2, '0') + ': ' + tag);
       });
       var txt = L.join('\n');
       (navigator.clipboard ? navigator.clipboard.writeText(txt) : Promise.reject()).then(function () {
@@ -715,8 +968,7 @@
     });
     drop.addEventListener('drop', function (e) { if (e.dataTransfer.files[0]) loadFile(e.dataTransfer.files[0]); });
 
-    $('pf-cluster').addEventListener('change', function (e) { state.cluster = e.target.value; });
-    $('pf-import').addEventListener('click', importGroups);
+    $('pf-sheet').addEventListener('change', function (e) { if (state._sheets) useSheet(+e.target.value); });
     $('pf-example').addEventListener('click', loadExample);
     $('pf-add').addEventListener('click', function () {
       state.groups.push({ abhas: '', bussan: '', price: '', excl: '', profit: '', dispute: '', currency: '', aOut: '', bOut: '' });
@@ -727,6 +979,7 @@
     $('pf-title').addEventListener('input', function (e) { state.title = e.target.value; scheduleRender(); });
 
     buildPayEditor();
+    updateDisclosure();
   }
 
   if (typeof window !== 'undefined' && window.LeadToolkit) {

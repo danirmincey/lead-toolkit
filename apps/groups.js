@@ -126,6 +126,25 @@
     return ROOM_COLORS[idx % ROOM_COLORS.length];
   }
 
+  /* centeredRowPad: given g total groups, cols per row, return {leftPad, rightPad}
+     for the last (partial) row. leftPad <= rightPad so the data block sits
+     left-of-center when total padding is odd (bias-left on odd remainder). */
+  function centeredRowPad(g, cols) {
+    var rem = g % cols;
+    if (rem === 0) return { leftPad: 0, rightPad: 0 };
+    var totalPad = cols - rem;
+    var leftPad = Math.floor(totalPad / 2);
+    return { leftPad: leftPad, rightPad: totalPad - leftPad };
+  }
+
+  /* influenceGroupHeader: returns header text for a group index under influence persona. */
+  var INFLUENCE_LABELS = ['Candidate A', 'Candidate B', 'Candidate C', 'Candidate D',
+                          'Candidate E', 'Candidate F', 'Candidate G', 'Candidate H'];
+  function influenceGroupHeader(i) {
+    if (i < INFLUENCE_LABELS.length) return INFLUENCE_LABELS[i];
+    return 'THIS EXERCISE ONLY HAS 8 GROUPS';
+  }
+
   /* ======================================================================
      UI
      ====================================================================== */
@@ -184,28 +203,37 @@
       '        <input type="file" id="gp-file" accept=".csv,.tsv,.txt,.xlsx,.xlsm,.xltx" style="display:none">' +
       '        <div id="gp-fileinfo"></div>' +
       '        <label class="field" id="gp-sheetrow" style="display:none">Sheet<select id="gp-sheet"></select></label>' +
+      '        <div class="clusterblock" id="gp-filterblock" style="display:none">' +
+      '          <div class="clusterlabel">Select cluster(s)</div>' +
+      '          <label class="field">Cluster column<select id="gp-filtercol"></select></label>' +
+      '          <div id="gp-filtervals"></div>' +
+      '        </div>' +
+      '        <div class="row"><button id="gp-sample" class="fixed">🎲 Demo data</button></div>' +
+      '      </div>' +
+      '    </details>' +
+
+      '    <details class="step disabled" open id="gp-step2">' +
+      '      <summary><span class="n">2</span> Names <span class="hint" id="gp-count2"></span></summary>' +
+      '      <div class="body">' +
       '        <div id="gp-cols" style="display:none">' +
       '          <div class="row">' +
       '            <label class="field">Name column<select id="gp-namecol"></select></label>' +
       '            <label class="field">+ second <span class="sub">(e.g. Last)</span><select id="gp-namecol2"></select></label>' +
       '          </div>' +
-      '          <label class="field">Filter people <span class="sub">(optional, e.g. clusters)</span><select id="gp-filtercol"></select></label>' +
-      '          <div id="gp-filtervals"></div>' +
       '        </div>' +
       '        <div class="row">' +
       '          <input type="text" id="gp-addname" placeholder="add a name by hand…">' +
       '          <button id="gp-addbtn" class="fixed">＋ Add</button>' +
       '        </div>' +
-      '        <div class="row"><button id="gp-sample" class="fixed">🎲 Demo data</button>' +
-      '        <button id="gp-clear" class="fixed">Clear</button></div>' +
+      '        <div class="row"><button id="gp-clear" class="fixed">Clear</button></div>' +
       '        <div class="word-list" id="gp-people" style="display:none"></div>' +
       '      </div>' +
       '    </details>' +
 
-      '    <details class="step disabled" open id="gp-step2">' +
-      '      <summary><span class="n">2</span> Classrooms <span class="hint" id="gp-roomhint"></span></summary>' +
+      '    <details class="step disabled" open id="gp-step3">' +
+      '      <summary><span class="n">3</span> Classrooms <span class="hint" id="gp-roomhint"></span></summary>' +
       '      <div class="body">' +
-      '        <div class="small-note">Which rooms, and how many groups fit in each. Tick <b>auto</b> on one room and it absorbs however many groups the class size needs. (Editing this re-deals the groups.)</div>' +
+      '        <div class="small-note">Which rooms, and how many groups fit in each. Tick <b>auto</b> on one room and it absorbs however many groups the class size needs. ▲▼ reorder the rooms. (Editing this re-deals the groups.)</div>' +
       '        <div id="gp-rooms"></div>' +
       '        <div class="row">' +
       '          <button id="gp-addroom" class="fixed">＋ Add classroom</button>' +
@@ -215,8 +243,8 @@
       '      </div>' +
       '    </details>' +
 
-      '    <details class="step disabled" open id="gp-step3">' +
-      '      <summary><span class="n">3</span> Allotment</summary>' +
+      '    <details class="step disabled" open id="gp-step4">' +
+      '      <summary><span class="n">4</span> Allotment</summary>' +
       '      <div class="body">' +
       '        <label class="field">Rule' +
       '          <select id="gp-mode">' +
@@ -228,12 +256,12 @@
       '        <label class="field" id="gp-keyrow" style="display:none">Column' +
       '          <select id="gp-keycol"></select></label>' +
       '        <div class="small-note" id="gp-sizenote"></div>' +
-      '        <div class="small-note">To adjust by hand: click a name, then click its new group. ✕ sends a name to the unassigned pool.</div>' +
+      '        <div class="small-note">To adjust by hand: click a name, then click its new group. ✎ renames a student; ✕ sends a name to the unassigned pool. Click a room label in the figure to rename the room.</div>' +
       '      </div>' +
       '    </details>' +
 
-      '    <details class="step disabled" open id="gp-step4">' +
-      '      <summary><span class="n">4</span> Look</summary>' +
+      '    <details class="step disabled" open id="gp-step5">' +
+      '      <summary><span class="n">5</span> Look</summary>' +
       '      <div class="body">' +
       '        <div class="row">' +
       '          <label class="field">Columns per row' +
@@ -358,6 +386,7 @@
 
       $('gp-fileinfo').innerHTML = '<span class="file-info">✓ ' + escapeHtml(name) + ' · ' + state.rows.length + ' rows</span>';
       $('gp-cols').style.display = '';
+      $('gp-filterblock').style.display = '';
 
       var first = state.headers.findIndex(function (h) { return /first/i.test(h); });
       var last = state.headers.findIndex(function (h) { return /last/i.test(h); });
@@ -390,23 +419,81 @@
         uniq.set(v, (uniq.get(v) || 0) + 1);
       });
       if (uniq.size > 40) { box.innerHTML = '<div class="small-note">⚠ too many values in that column.</div>'; state.includeValues = null; return; }
-      if (state.includeValues === null) state.includeValues = new Set(uniq.keys());
+      // cluster-picker doctrine: default to NONE unless exactly one unique value
+      if (state.includeValues === null) {
+        if (uniq.size === 1) {
+          state.includeValues = new Set(uniq.keys());
+        } else {
+          state.includeValues = new Set();
+        }
+      }
+
+      var btnRow = document.createElement('div');
+      btnRow.className = 'row';
+      btnRow.style.marginBottom = '4px';
+      var selAll = document.createElement('button');
+      selAll.className = 'fixed';
+      selAll.textContent = 'Select all';
+      var clrAll = document.createElement('button');
+      clrAll.className = 'fixed';
+      clrAll.textContent = 'Clear all';
+      btnRow.appendChild(selAll);
+      btnRow.appendChild(clrAll);
+      box.appendChild(btnRow);
+
       var list = document.createElement('div');
       list.className = 'value-list';
+
+      function refreshLabels() {
+        Array.prototype.forEach.call(list.querySelectorAll('label'), function (lab) {
+          var inp = lab.querySelector('input');
+          var v2 = inp.getAttribute('data-v');
+          var on = state.includeValues.has(v2);
+          inp.checked = on;
+          lab.className = on ? 'on' : '';
+        });
+      }
+
       Array.from(uniq.keys()).sort().forEach(function (v) {
         var lab = document.createElement('label');
         var on = state.includeValues.has(v);
         lab.className = on ? 'on' : '';
-        lab.innerHTML = '<input type="checkbox" ' + (on ? 'checked' : '') + '> ' +
+        lab.innerHTML = '<input type="checkbox" data-v="' + escapeHtml(v) + '" ' + (on ? 'checked' : '') + '> ' +
           (v === '' ? '(blank)' : escapeHtml(v)) + ' <span class="cnt">' + uniq.get(v) + '</span>';
         lab.querySelector('input').addEventListener('change', function (e) {
           if (e.target.checked) state.includeValues.add(v); else state.includeValues.delete(v);
           lab.className = e.target.checked ? 'on' : '';
+          updateNote();
           rebuildPeopleFromRows();
         });
         list.appendChild(lab);
       });
       box.appendChild(list);
+
+      var note = document.createElement('div');
+      note.id = 'gp-clusternote';
+      note.className = 'small-note';
+      note.style.marginTop = '4px';
+      box.appendChild(note);
+
+      function updateNote() {
+        note.textContent = (state.includeValues && state.includeValues.size === 0 && uniq.size > 1)
+          ? 'tick your cluster(s) to continue' : '';
+      }
+      updateNote();
+
+      selAll.addEventListener('click', function () {
+        state.includeValues = new Set(uniq.keys());
+        refreshLabels();
+        updateNote();
+        rebuildPeopleFromRows();
+      });
+      clrAll.addEventListener('click', function () {
+        state.includeValues = new Set();
+        refreshLabels();
+        updateNote();
+        rebuildPeopleFromRows();
+      });
     }
 
     function includedRows() {
@@ -432,8 +519,10 @@
     /* ---------- people list ---------- */
 
     function afterPeopleChanged() {
-      $('gp-count').textContent = state.people.length ? state.people.length + ' people' : '';
-      ['gp-step2', 'gp-step3', 'gp-step4'].forEach(function (s) { $(s).classList.remove('disabled'); });
+      var countText = state.people.length ? state.people.length + ' people' : '';
+      $('gp-count').textContent = countText;
+      $('gp-count2').textContent = countText;
+      ['gp-step2', 'gp-step3', 'gp-step4', 'gp-step5'].forEach(function (s) { $(s).classList.remove('disabled'); });
       $('gp-pptx').disabled = !state.people.length;
       renderPeopleChips();
       renderRooms();          // auto room count depends on the class size
@@ -447,7 +536,12 @@
       state.people.forEach(function (p) {
         var chip = document.createElement('span');
         chip.className = 'chip';
+        chip.title = 'click to rename';
         chip.innerHTML = escapeHtml(p.name) + '<button title="remove entirely">✕</button>';
+        chip.addEventListener('click', function (e) {
+          if (e.target.tagName === 'BUTTON') return;
+          renamePerson(p.id);
+        });
         chip.querySelector('button').addEventListener('click', function () {
           state.people = state.people.filter(function (q) { return q.id !== p.id; });
           afterPeopleChanged();
@@ -476,11 +570,14 @@
             'value="' + r.count + '" title="groups in this room"') + '>' +
           '<label class="check fixed" title="this room absorbs the remaining groups"><input type="checkbox" ' +
           (r.auto ? 'checked' : '') + '> auto</label>' +
+          '<button class="fixed" title="move room up">▲</button>' +
+          '<button class="fixed" title="move room down">▼</button>' +
           '<button class="fixed" title="remove room">✕</button>';
         var inputs = row.querySelectorAll('input');
         inputs[0].addEventListener('change', function (e) {
           r.name = e.target.value.trim() || 'room';
           state._roomsTouched = true;
+          renderTable();  // preview room labels update immediately
           reallot();
         });
         inputs[1].addEventListener('change', function (e) {
@@ -494,7 +591,22 @@
           state._roomsTouched = true;
           renderRooms(); reallot();
         });
-        row.querySelector('button').addEventListener('click', function () {
+        var btns = row.querySelectorAll('button');
+        btns[0].disabled = i === 0;
+        btns[1].disabled = i === state.rooms.length - 1;
+        btns[0].addEventListener('click', function () {   // move up
+          if (i === 0) return;
+          var t = state.rooms[i - 1]; state.rooms[i - 1] = state.rooms[i]; state.rooms[i] = t;
+          state._roomsTouched = true;
+          renderRooms(); reallot();
+        });
+        btns[1].addEventListener('click', function () {   // move down
+          if (i >= state.rooms.length - 1) return;
+          var t = state.rooms[i + 1]; state.rooms[i + 1] = state.rooms[i]; state.rooms[i] = t;
+          state._roomsTouched = true;
+          renderRooms(); reallot();
+        });
+        btns[2].addEventListener('click', function () {   // remove
           if (state.rooms.length <= 1) return;
           state.rooms.splice(i, 1);
           state._roomsTouched = true;
@@ -531,6 +643,19 @@
       return state.people.filter(function (p) { return p.id === id; })[0] || null;
     }
 
+    // rename a student everywhere: state, names chips, group panel
+    function renamePerson(id) {
+      var p = personById(id);
+      if (!p) return;
+      var v = window.prompt('Rename this student:', p.name);
+      if (v === null) return;
+      v = String(v).trim();
+      if (!v) return;
+      p.name = v;
+      renderPeopleChips();
+      renderTable();
+    }
+
     function movePerson(id, targetGroup) {   // targetGroup -1 = pool
       state.assignments = state.assignments.map(function (grp) {
         return grp.filter(function (x) { return x !== id; });
@@ -544,8 +669,17 @@
 
     /* ---------- preview table ---------- */
 
+    /* groupHeaderText: returns display label for group index i.
+       Under influence persona: Candidate A-H for i 0-7, warning beyond. */
+    function groupHeaderText(i) {
+      if (state._appliedSub === 'influence') return influenceGroupHeader(i);
+      return String(i + 1);
+    }
+
     function renderTable() {
       var g = totalGroups();
+      // influence persona: lock cols to 4 regardless of picker
+      var cols = state._appliedSub === 'influence' ? 4 : state.cols;
       var holder = $('gp-table');
       var rooms = resolvedRooms();
       var roomIdx = roomOfGroups(rooms);
@@ -557,15 +691,36 @@
       holder.style.setProperty('--grp-border', state.borderColor);
 
       var fs = Math.round(13 * state.textScale);
+      var numBands = Math.ceil(g / cols);
       var html = '<table class="grp" style="font-size:' + fs + 'px">';
-      for (var band = 0; band < Math.ceil(g / state.cols); band++) {
-        var from = band * state.cols, to = Math.min(g, from + state.cols);
+      for (var band = 0; band < numBands; band++) {
+        var from = band * cols;
+        var to = Math.min(g, from + cols);
+        var isLastBand = (band === numBands - 1);
+        var pad = isLastBand ? centeredRowPad(g, cols) : { leftPad: 0, rightPad: 0 };
+
+        // header row (group numbers / candidate labels)
         html += '<tr>';
-        for (var i = from; i < to; i++) {
-          html += '<td class="grp-num' + (state.selectedPerson ? ' movable' : '') + '" data-g="' + i + '">' + (i + 1) + '</td>';
+        // left padding cells
+        for (var lp = 0; lp < pad.leftPad; lp++) {
+          html += '<td style="border:none;background:none"></td>';
         }
-        for (var pad = to; pad < from + state.cols; pad++) html += '<td style="border:none;background:none"></td>';
-        html += '</tr><tr>';
+        for (var i = from; i < to; i++) {
+          html += '<td class="grp-num' + (state.selectedPerson ? ' movable' : '') + '" data-g="' + i + '">' +
+            escapeHtml(groupHeaderText(i)) + '</td>';
+        }
+        // right padding cells
+        for (var rp = 0; rp < pad.rightPad; rp++) {
+          html += '<td style="border:none;background:none"></td>';
+        }
+        html += '</tr>';
+
+        // member row
+        html += '<tr>';
+        // left padding cells
+        for (var lp2 = 0; lp2 < pad.leftPad; lp2++) {
+          html += '<td style="border:none;background:none"></td>';
+        }
         for (var i2 = from; i2 < to; i2++) {
           var ids = state.assignments[i2] || [];
           var room = rooms[roomIdx[i2]];
@@ -575,16 +730,56 @@
             var p = personById(id);
             if (!p) return;
             html += '<div><span class="grp-name' + (state.selectedPerson === id ? ' sel' : '') + '" data-p="' + id + '">' +
-              escapeHtml(p.name) + '<button data-x="' + id + '" title="send to unassigned">✕</button></span></div>';
+              escapeHtml(p.name) + '<button data-e="' + id + '" title="rename">✎</button>' +
+              '<button data-x="' + id + '" title="send to unassigned">✕</button></span></div>';
           });
-          html += '<div class="grp-room" style="color:' + roomColor(room.name, roomIdx[i2]) + '">(' + escapeHtml(room.name) + ')</div>';
+          // room label: clicking it turns into an inline text input for editing
+          html += '<div class="grp-room" data-room-idx="' + roomIdx[i2] + '" style="cursor:pointer;color:' +
+            roomColor(room.name, roomIdx[i2]) + '">(' + escapeHtml(room.name) + ')</div>';
           html += '</td>';
         }
-        for (var pad2 = to; pad2 < from + state.cols; pad2++) html += '<td style="border:none;background:none"></td>';
+        // right padding cells
+        for (var rp2 = 0; rp2 < pad.rightPad; rp2++) {
+          html += '<td style="border:none;background:none"></td>';
+        }
         html += '</tr>';
       }
       html += '</table>';
       holder.innerHTML = html;
+
+      // wire up clickable room labels (click-to-edit)
+      Array.prototype.forEach.call(holder.querySelectorAll('.grp-room'), function (el) {
+        el.addEventListener('click', function (e) {
+          if (el.querySelector('input')) return; // already editing
+          var ri = +el.getAttribute('data-room-idx');
+          var room = resolvedRooms()[ri];
+          var oldName = room ? room.name : '';
+          var inp = document.createElement('input');
+          inp.type = 'text';
+          inp.value = oldName;
+          inp.style.cssText = 'width:90%;font-size:inherit;color:inherit';
+          inp.onclick = function (ev) { ev.stopPropagation(); };
+          function commit() {
+            var newName = inp.value.trim() || oldName;
+            if (state.rooms[ri]) {
+              state.rooms[ri].name = newName;
+              state._roomsTouched = true;
+            }
+            renderRooms();
+            renderTable();
+          }
+          inp.addEventListener('blur', commit);
+          inp.addEventListener('keydown', function (ev) {
+            if (ev.key === 'Enter') { inp.blur(); }
+            if (ev.key === 'Escape') { inp.value = oldName; inp.blur(); }
+          });
+          el.innerHTML = '';
+          el.appendChild(inp);
+          inp.focus();
+          inp.select();
+          e.stopPropagation();
+        });
+      });
 
       // wiring: chips select / drag / remove; cells receive clicks AND drops
       Array.prototype.forEach.call(holder.querySelectorAll('.grp-name'), function (el) {
@@ -603,9 +798,16 @@
       Array.prototype.forEach.call(holder.querySelectorAll('[data-x]'), function (el) {
         el.addEventListener('click', function () { movePerson(el.getAttribute('data-x'), -1); });
       });
+      Array.prototype.forEach.call(holder.querySelectorAll('[data-e]'), function (el) {
+        el.addEventListener('click', function (e) {
+          e.stopPropagation();
+          renamePerson(el.getAttribute('data-e'));
+        });
+      });
       Array.prototype.forEach.call(holder.querySelectorAll('[data-g]'), function (el) {
         el.addEventListener('click', function (e) {
           if (e.target.closest('.grp-name')) return;
+          if (e.target.closest('.grp-room')) return;
           if (state.selectedPerson) movePerson(state.selectedPerson, +el.getAttribute('data-g'));
         });
         el.addEventListener('dragover', function (e) {
@@ -649,7 +851,7 @@
       $('gp-sizenote').textContent = state.people.length + ' people → ' + g + ' groups of ' +
         (sizes.length ? Math.min.apply(null, sizes) + '–' + Math.max.apply(null, sizes) : '?') + '.';
       $('gp-status').textContent = state.people.length + ' people · ' + g + ' groups · ' +
-        rooms.map(function (r) { return r.name + ' ×' + r.count + (r.auto ? ' (auto)' : ''); }).join(', ');
+        rooms.map(function (r) { return r.name + ' x' + r.count + (r.auto ? ' (auto)' : ''); }).join(', ');
     }
 
     /* ---------- PPTX export ---------- */
@@ -661,52 +863,74 @@
       var roomIdx = roomOfGroups(rooms);
       var CW = 2560, CH = 1440;
       var margin = 70;
-      var cols = state.cols;
+      // influence persona is locked to 4 columns per row, same as the preview
+      var cols = state._appliedSub === 'influence' ? 4 : state.cols;
       var colW = (CW - 2 * margin) / cols;
-      var nameSize = 24 * state.textScale;
-      var numSize = 26 * state.textScale;
-      var lineH = nameSize * 1.5;
+      // ~12pt on the slide: sizePx = 12 * 12700 * canvasW / 12192000 = 32 at 2560
+      var nameSize = 32 * state.textScale;
+      var numSize = 34 * state.textScale;
+      var lineH = nameSize * 1.35;
 
-      var rows = [];
-      for (var band = 0; band < Math.ceil(g / cols); band++) {
+      var tables = [];
+      var mainRows = [];
+      var y = margin;
+      var numBands = Math.ceil(g / cols);
+      for (var band = 0; band < numBands; band++) {
         var from = band * cols, to = Math.min(g, from + cols);
+        var count = to - from;
         var numCells = [], memCells = [], maxLines = 1;
-        for (var i = from; i < from + cols; i++) {
-          if (i < to) {
-            numCells.push({
-              fill: state.headFill,
-              paras: [{ runs: [{ text: String(i + 1), color: '#000000' }], sizePx: numSize, align: 'ctr' }]
-            });
-            var ids = state.assignments[i] || [];
-            var room = rooms[roomIdx[i]];
-            var paras = ids.map(function (id) {
-              var p = personById(id);
-              return { runs: [{ text: p ? p.name : '', color: '#000000' }], sizePx: nameSize, align: 'ctr' };
-            });
-            paras.push({
-              runs: [{ text: '(' + room.name + ')', bold: true, color: roomColor(room.name, roomIdx[i]) }],
-              sizePx: nameSize, align: 'ctr'
-            });
-            maxLines = Math.max(maxLines, paras.length);
-            memCells.push({ fill: state.bodyFill, paras: paras });
-          } else {
-            numCells.push({ fill: '#FFFFFF', paras: [] });
-            memCells.push({ fill: '#FFFFFF', paras: [] });
-          }
+        for (var i = from; i < to; i++) {
+          numCells.push({
+            fill: state.headFill,
+            paras: [{ runs: [{ text: groupHeaderText(i), color: '#000000' }], sizePx: numSize, align: 'ctr' }]
+          });
+          var ids = state.assignments[i] || [];
+          var room = rooms[roomIdx[i]];
+          var paras = ids.map(function (id) {
+            var p = personById(id);
+            return { runs: [{ text: p ? p.name : '', color: '#000000' }], sizePx: nameSize, align: 'ctr' };
+          });
+          paras.push({
+            runs: [{ text: '(' + room.name + ')', bold: true, color: roomColor(room.name, roomIdx[i]) }],
+            sizePx: nameSize, align: 'ctr'
+          });
+          maxLines = Math.max(maxLines, paras.length);
+          memCells.push({ fill: state.bodyFill, paras: paras });
         }
-        rows.push({ h: numSize * 2.0, cells: numCells });
-        rows.push({ h: maxLines * lineH + 26, cells: memCells });
+        var headH = numSize * 1.8;
+        var bodyH = maxLines * lineH + 22;
+        if (count === cols) {
+          mainRows.push({ h: headH, cells: numCells });
+          mainRows.push({ h: bodyH, cells: memCells });
+          y += headH + bodyH;
+        } else {
+          // partial last band: emit it as its OWN table, shifted right so the
+          // leftover groups sit centered under the block (left-biased when the
+          // padding is odd, like the preview). No padding cells at all, so no
+          // stray bordered or filled cells, matching the class slides.
+          var pad = centeredRowPad(g, cols);
+          tables.push({
+            x: margin + pad.leftPad * colW, y: y,
+            colWidths: Array.apply(null, Array(count)).map(function () { return colW; }),
+            border: { color: state.borderColor, w: 2.5 },
+            font: 'Arial',
+            rows: [{ h: headH, cells: numCells }, { h: bodyH, cells: memCells }]
+          });
+        }
       }
-
-      var bytes = window.pptxLite.makePptx({
-        canvasW: CW, canvasH: CH, background: '#FFFFFF',
-        tables: [{
+      if (mainRows.length) {
+        tables.unshift({
           x: margin, y: margin,
           colWidths: Array.apply(null, Array(cols)).map(function () { return colW; }),
           border: { color: state.borderColor, w: 2.5 },
           font: 'Arial',
-          rows: rows
-        }]
+          rows: mainRows
+        });
+      }
+
+      var bytes = window.pptxLite.makePptx({
+        canvasW: CW, canvasH: CH, background: '#FFFFFF',
+        tables: tables
       });
       var blob = new Blob([bytes], { type: 'application/vnd.openxmlformats-officedocument.presentationml.presentation' });
       var a = document.createElement('a');
@@ -748,8 +972,10 @@
       if (!v) return;
       state.people.push({ id: 'p' + (++uid), name: v, key: '', manual: true });
       $('gp-addname').value = '';
-      $('gp-count').textContent = state.people.length + ' people';
-      ['gp-step2', 'gp-step3', 'gp-step4'].forEach(function (s) { $(s).classList.remove('disabled'); });
+      var countText = state.people.length + ' people';
+      $('gp-count').textContent = countText;
+      $('gp-count2').textContent = countText;
+      ['gp-step2', 'gp-step3', 'gp-step4', 'gp-step5'].forEach(function (s) { $(s).classList.remove('disabled'); });
       $('gp-pptx').disabled = false;
       renderPeopleChips();
       if (state.assignments.length) { state.pool.push(state.people[state.people.length - 1].id); renderTable(); }
@@ -767,7 +993,7 @@
     });
     $('gp-clear').addEventListener('click', function () {
       state.people = []; state.assignments = []; state.pool = [];
-      $('gp-fileinfo').innerHTML = ''; $('gp-count').textContent = '';
+      $('gp-fileinfo').innerHTML = ''; $('gp-count').textContent = ''; $('gp-count2').textContent = '';
       $('gp-people').style.display = 'none'; $('gp-cols').style.display = 'none';
       $('gp-table').innerHTML = ''; $('gp-pool').style.display = 'none';
       $('gp-empty').style.display = ''; $('gp-pptx').disabled = true;
@@ -807,7 +1033,11 @@
       rebuildPeopleFromRows();
     });
 
-    $('gp-colsper').addEventListener('change', function (e) { state.cols = +e.target.value; renderTable(); });
+    $('gp-colsper').addEventListener('change', function (e) {
+      state.cols = +e.target.value;
+      // influence persona: always 4 cols regardless of picker
+      if (state._appliedSub !== 'influence') renderTable();
+    });
     $('gp-ts').addEventListener('input', function (e) {
       state.textScale = parseFloat(e.target.value);
       $('gp-ts-o').textContent = state.textScale.toFixed(2).replace(/0$/, '') + '×';
@@ -845,6 +1075,8 @@
       if (sub === state._appliedSub) return;
       if (state._roomsTouched) return;   // never clobber manual room edits
       state.rooms = sub === 'influence' ? class3Rooms() : class2Rooms();
+      // influence: 4 cols per row; decision-making: 5 cols
+      state.cols = sub === 'influence' ? 4 : 5;
       state._appliedSub = sub;
       renderRooms(); reallot();
     };
@@ -891,7 +1123,9 @@
       roomOfGroups: roomOfGroups,
       autoGroupsFor: autoGroupsFor,
       resolveRooms: resolveRooms,
-      roomColor: roomColor
+      roomColor: roomColor,
+      centeredRowPad: centeredRowPad,
+      influenceGroupHeader: influenceGroupHeader
     };
   }
 })();

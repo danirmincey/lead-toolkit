@@ -3,8 +3,8 @@
    Gender / race bar charts like the slides ("n (x.x%)" above blue bars,
    wrapped labels, no axes) with a chart-type dropdown (Bar / Pie).
    Sources: the roster if it carries the columns, otherwise the separate
-   demographics export ("Demo Data …" | Gender + race_ethnicity_1…7
-   checkbox columns, which get combined automatically like the R script).
+   demographics export ("Demo Data ..." | Gender + race_ethnicity_1...7
+   checkbox columns; a combine mode counts across several columns at once).
    Cluster filter included. PNG export, full-resolution preview.
    ========================================================================== */
 
@@ -53,7 +53,9 @@
       chart: 'bar',
       override: null,               // user-edited numbers win over extraction
       barColor: '#4472C4', labelScale: 1,
-      dims: '1600x1200'
+      dims: '1600x1200',
+      fontFamily: 'Candara',
+      combineIdxs: null             // ticked column indices for combine block
     };
 
     container.innerHTML = '' +
@@ -65,25 +67,29 @@
       '    <details class="step" open>' +
       '      <summary><span class="n">1</span> Load data <span class="hint" id="ch-fhint"></span></summary>' +
       '      <div class="body">' +
-      '        <div class="dropzone" id="ch-drop"><strong>DROP DATA HERE</strong><ul class="drop-spec"><li><b>Type of file:</b> CSV or Excel (.xlsx)</li><li><b>What you\'re looking for:</b> the "Demo Data" export (Gender + race_ethnicity_1…7) or a roster carrying those columns</li></ul></div>' +
+      '        <div class="dropzone" id="ch-drop"><strong>DROP DATA HERE</strong><ul class="drop-spec"><li><b>Type of file:</b> CSV or Excel (.xlsx)</li><li><b>What you\'re looking for:</b> the "Demo Data" export (Gender + race_ethnicity_1...7) or a roster carrying those columns</li></ul></div>' +
       '        <input type="file" id="ch-file" accept=".csv,.tsv,.txt,.xlsx,.xlsm,.xltx" style="display:none">' +
       '        <div id="ch-fileinfo"></div>' +
-      '        <div class="row"><button id="ch-demo" class="fixed">🎲 Demo data</button></div>' +
       '        <label class="field" id="ch-sheetrow" style="display:none">Sheet<select id="ch-sheet"></select></label>' +
-      '        <label class="field">Filter people <span class="sub">(e.g. your cluster)</span><select id="ch-filtercol"></select></label>' +
-      '        <div id="ch-filtervals"></div>' +
+      '        <div class="clusterblock" id="ch-clusterblock" style="display:none">' +
+      '          <div class="clusterlabel">Select cluster(s)</div>' +
+      '          <label class="field">Cluster column<select id="ch-filtercol"></select></label>' +
+      '          <div id="ch-filtervals"></div>' +
+      '        </div>' +
+      '        <div class="row"><button id="ch-demo" class="fixed">🎲 Demo data</button></div>' +
       '      </div>' +
       '    </details>' +
 
       '    <details class="step disabled" open>' +
       '      <summary><span class="n">2</span> What to chart</summary>' +
       '      <div class="body">' +
-      '        <div class="row">' +
-      '          <button id="ch-gender" class="fixed">🚻 Gender</button>' +
-      '          <button id="ch-race" class="fixed">🌍 Race / Ethnicity</button>' +
+      '        <label class="field">Mode' +
+      '          <select id="ch-mode"><option value="single" selected>One column</option><option value="combine">Combine several columns</option></select></label>' +
+      '        <label class="field" id="ch-colrow">Column to chart<select id="ch-col"></select></label>' +
+      '        <div id="ch-combine-block" style="display:none">' +
+      '          <div id="ch-combinelist" style="max-height:200px;overflow-y:auto"></div>' +
+      '          <div class="small-note" style="margin-top:4px">tick 2+ columns to count across them (like the old race_ethnicity set)</div>' +
       '        </div>' +
-      '        <div class="small-note" id="ch-presetnote"></div>' +
-      '        <label class="field">…or any single column<select id="ch-col"></select></label>' +
       '      </div>' +
       '    </details>' +
 
@@ -91,8 +97,8 @@
       '      <summary><span class="n">3</span> Numbers <span class="hint">(editable)</span></summary>' +
       '      <div class="body">' +
       '        <div id="ch-nums"></div>' +
-      '        <div class="row"><button id="ch-addnum" class="fixed">＋ Add row</button>' +
-      '        <button id="ch-renum" class="fixed">↺ Re-extract</button></div>' +
+      '        <div class="row"><button id="ch-addnum" class="fixed">+ Add row</button>' +
+      '        <button id="ch-renum" class="fixed">Re-extract</button></div>' +
       '      </div>' +
       '    </details>' +
 
@@ -104,19 +110,21 @@
       '            <select id="ch-chart"><option value="bar" selected>Bar chart (like the slides)</option><option value="pie">Pie chart</option></select></label>' +
       '          <label class="field">Color<input type="color" id="ch-color" value="#4472C4"></label>' +
       '        </div>' +
-      '        <div class="slider-field"><div class="top">Label size <output id="ch-ls-o">1.0×</output></div>' +
+      '        <div class="slider-field"><div class="top">Label size <output id="ch-ls-o">1.0x</output></div>' +
       '          <input type="range" id="ch-ls" min="0.6" max="1.6" step="0.05" value="1"></div>' +
+      '        <label class="field">Font' +
+      '          <select id="ch-font"><option value="Candara" selected>Candara</option><option value="Corbel">Corbel</option><option value="Arial">Arial</option><option value="Georgia">Georgia</option><option value="Calibri">Calibri</option></select></label>' +
       '        <label class="field">Image size' +
-      '          <select id="ch-dims"><option value="1600x1200" selected>1600 × 1200</option>' +
-      '          <option value="2000x1200">2000 × 1200 (wide)</option><option value="1200x1400">1200 × 1400 (tall)</option></select></label>' +
+      '          <select id="ch-dims"><option value="1600x1200" selected>1600 x 1200</option>' +
+      '          <option value="2000x1200">2000 x 1200 (wide)</option><option value="1200x1400">1200 x 1400 (tall)</option></select></label>' +
       '      </div>' +
       '    </details>' +
       '  </div>' +
 
       '  <div class="preview-panel">' +
       '    <div class="preview-toolbar">' +
-      '      <button id="ch-png" class="primary" disabled>⬇ PNG</button>' +
-      '      <button id="ch-ppt" disabled>⬇ PowerPoint</button>' +
+      '      <button id="ch-png" class="primary" disabled>Download PNG</button>' +
+      '      <button id="ch-ppt" disabled>Download PowerPoint</button>' +
       '      <span class="status" id="ch-status"></span>' +
       '    </div>' +
       '    <div class="canvas-holder" style="background:#fff">' +
@@ -163,7 +171,6 @@
     }
 
     // drop Qualtrics question-text and ImportId rows sitting under the header
-    // (question-text rows are long in MOST cells; data rows only in a few)
     function stripJunkRows(rows) {
       var out = rows.slice(1), dropped = 0;
       while (out.length && dropped < 2) {
@@ -213,18 +220,36 @@
       state.fileName = name;
       state.filterCol = state.headers.findIndex(function (h) { return /cluster/i.test(h); });
       state.includeValues = null;
+      state.override = null;
+      state.combineIdxs = null;
+      state.mode = 'single';
+      $('ch-mode').value = 'single';
+      $('ch-colrow').style.display = '';
+      $('ch-combine-block').style.display = 'none';
 
       var opts = state.headers.map(function (h, i) { return '<option value="' + i + '">' + escapeHtml(h) + '</option>'; }).join('');
       $('ch-col').innerHTML = '<option value="-1">- pick a column -</option>' + opts;
       $('ch-filtercol').innerHTML = '<option value="-1">- no filter -</option>' + opts;
       $('ch-filtercol').value = String(state.filterCol);
+      $('ch-clusterblock').style.display = '';
       buildFilterValues();
+      buildCombineList();
+
+      // auto-default to the first gender/sex column
+      var gi = state.headers.findIndex(function (h) { return /gender|sex/i.test(h) && !/text/i.test(h); });
+      if (gi !== -1) {
+        state.cols = [gi];
+        $('ch-col').value = String(gi);
+      } else {
+        state.cols = [];
+        $('ch-col').value = '-1';
+      }
 
       $('ch-fileinfo').innerHTML = '<span class="file-info">✓ ' + escapeHtml(name) + ' · ' + state.rows.length + ' responses' +
         (sq.dropped ? ' · Qualtrics header rows removed' : '') + '</span>';
       $('ch-fhint').textContent = name;
       Array.prototype.forEach.call(container.querySelectorAll('details.step'), function (d) { d.classList.remove('disabled'); });
-      tryPreset('gender', true);
+      scheduleRender();
     }
 
     function buildFilterValues() {
@@ -237,14 +262,47 @@
         uniq.set(v, (uniq.get(v) || 0) + 1);
       });
       if (uniq.size > 40) { state.includeValues = null; return; }
-      if (state.includeValues === null) state.includeValues = new Set(uniq.keys());
+
+      // cluster-picker doctrine: default to NONE unless exactly one unique value
+      if (state.includeValues === null) {
+        if (uniq.size === 1) {
+          state.includeValues = new Set(uniq.keys());
+        } else {
+          state.includeValues = new Set();
+        }
+      }
+
+      var btnRow = document.createElement('div');
+      btnRow.className = 'row';
+      btnRow.style.marginBottom = '4px';
+      var selAll = document.createElement('button');
+      selAll.className = 'fixed';
+      selAll.textContent = 'Select all';
+      var clrAll = document.createElement('button');
+      clrAll.className = 'fixed';
+      clrAll.textContent = 'Clear all';
+      btnRow.appendChild(selAll);
+      btnRow.appendChild(clrAll);
+      box.appendChild(btnRow);
+
       var list = document.createElement('div');
       list.className = 'value-list';
+
+      function refreshLabels() {
+        Array.prototype.forEach.call(list.querySelectorAll('label'), function (lab) {
+          var inp = lab.querySelector('input');
+          var v2 = inp.getAttribute('data-v');
+          var on = state.includeValues.has(v2);
+          inp.checked = on;
+          lab.className = on ? 'on' : '';
+        });
+      }
+
       Array.from(uniq.keys()).sort().forEach(function (v) {
         var lab = document.createElement('label');
         var on = state.includeValues.has(v);
         lab.className = on ? 'on' : '';
-        lab.innerHTML = '<input type="checkbox" ' + (on ? 'checked' : '') + '> ' +
+        lab.innerHTML = '<input type="checkbox" data-v="' + escapeHtml(v) + '" ' + (on ? 'checked' : '') + '> ' +
           (v === '' ? '(blank)' : escapeHtml(v)) + ' <span class="cnt">' + uniq.get(v) + '</span>';
         lab.querySelector('input').addEventListener('change', function (e) {
           if (e.target.checked) state.includeValues.add(v); else state.includeValues.delete(v);
@@ -255,6 +313,90 @@
         list.appendChild(lab);
       });
       box.appendChild(list);
+
+      var note = document.createElement('div');
+      note.id = 'ch-clusternote';
+      note.className = 'small-note';
+      note.style.marginTop = '4px';
+      box.appendChild(note);
+
+      function updateNote() {
+        note.textContent = (state.includeValues && state.includeValues.size === 0 && uniq.size > 1)
+          ? 'tick your cluster(s) to continue' : '';
+      }
+      updateNote();
+
+      selAll.addEventListener('click', function () {
+        state.includeValues = new Set(uniq.keys());
+        state.override = null;
+        refreshLabels();
+        updateNote();
+        scheduleRender();
+      });
+      clrAll.addEventListener('click', function () {
+        state.includeValues = new Set();
+        state.override = null;
+        refreshLabels();
+        updateNote();
+        scheduleRender();
+      });
+
+      // keep note in sync when checkboxes change
+      Array.prototype.forEach.call(list.querySelectorAll('input'), function (inp) {
+        inp.addEventListener('change', updateNote);
+      });
+    }
+
+    function buildCombineList() {
+      var box = $('ch-combinelist');
+      box.innerHTML = '';
+      if (!state.headers.length) return;
+
+      // auto-detect race_ethnicity group
+      var raceIdxs = findCheckboxGroup(state.headers, /race|ethnic/i);
+      var raceSet = {};
+      raceIdxs.forEach(function (i) { raceSet[i] = true; });
+
+      state.headers.forEach(function (h, i) {
+        var lab = document.createElement('label');
+        var preCheck = raceIdxs.length > 0 && raceSet[i];
+        lab.innerHTML = '<input type="checkbox" data-ci="' + i + '" ' + (preCheck ? 'checked' : '') + '> ' + escapeHtml(h);
+        lab.style.display = 'block';
+        box.appendChild(lab);
+      });
+
+      // remember the pre-ticked set; it only applies once the mode says combine
+      state.combineIdxs = raceIdxs.length >= 2 ? raceIdxs.slice() : null;
+
+      // wire up: track ticks; apply them only while combine mode is active
+      Array.prototype.forEach.call(box.querySelectorAll('input'), function (inp) {
+        inp.addEventListener('change', function () {
+          var ticked = [];
+          Array.prototype.forEach.call(box.querySelectorAll('input:checked'), function (ci) {
+            ticked.push(+ci.getAttribute('data-ci'));
+          });
+          state.combineIdxs = ticked.length ? ticked : null;
+          if (state.mode === 'combine') {
+            state.cols = ticked;
+            state.override = null;
+            scheduleRender();
+          }
+        });
+      });
+    }
+
+    // set state.cols from whichever picker the current mode uses
+    function applyMode() {
+      if (state.mode === 'combine') {
+        var ticked = [];
+        Array.prototype.forEach.call($('ch-combinelist').querySelectorAll('input:checked'), function (ci) {
+          ticked.push(+ci.getAttribute('data-ci'));
+        });
+        state.cols = ticked;
+      } else {
+        var v = +$('ch-col').value;
+        state.cols = v >= 0 ? [v] : [];
+      }
     }
 
     function includedRows() {
@@ -263,29 +405,6 @@
         var v = String(r[state.filterCol] === undefined ? '' : r[state.filterCol]).trim();
         return state.includeValues.has(v);
       });
-    }
-
-    /* ---------- presets ---------- */
-
-    function tryPreset(which, silent) {
-      if (!state.headers.length) return;
-      state.override = null;
-      if (which === 'gender') {
-        var gi = state.headers.findIndex(function (h) { return /^gender$/i.test(h.trim()) || (/gender/i.test(h) && !/text/i.test(h)); });
-        if (gi === -1) { if (!silent) $('ch-presetnote').textContent = '⚠ no Gender column here (this file may be the roster; try the demographics export).'; return; }
-        state.cols = [gi];
-        $('ch-presetnote').textContent = '✓ Gender → ' + state.headers[gi];
-      } else {
-        var idx = findCheckboxGroup(state.headers, /race|ethnic/i);
-        if (!idx.length) {
-          var single = state.headers.findIndex(function (h) { return /race|ethnic/i.test(h) && !/text/i.test(h); });
-          if (single === -1) { if (!silent) $('ch-presetnote').textContent = '⚠ no race/ethnicity columns here; try the demographics export.'; return; }
-          idx = [single];
-        }
-        state.cols = idx;
-        $('ch-presetnote').textContent = '✓ Race/Ethnicity → ' + idx.length + ' column(s) combined';
-      }
-      scheduleRender();
     }
 
     /* ---------- chart ---------- */
@@ -320,7 +439,7 @@
         row.className = 'row';
         row.innerHTML = '<input type="text" data-i="' + i + '" data-k="0" value="' + escapeHtml(d[0]) + '" style="flex:2;min-width:0">' +
           '<input type="number" step="any" data-i="' + i + '" data-k="1" value="' + d[1] + '" style="flex:1;min-width:0">' +
-          '<button class="fixed" data-del="' + i + '" title="remove">×</button>';
+          '<button class="fixed" data-del="' + i + '" title="remove">x</button>';
         box.appendChild(row);
       });
       Array.prototype.forEach.call(box.querySelectorAll('input'), function (inp) {
@@ -350,7 +469,17 @@
 
     function render() {
       var data = currentData();
-      if (!data.length) { $('ch-status').textContent = ''; return; }
+      if (!data.length) {
+        canvas.style.display = 'none';
+        var em = $('ch-empty');
+        em.textContent = (state.filterCol >= 0 && state.includeValues !== null && state.includeValues.size === 0)
+          ? 'tick your cluster(s) above to continue' : 'output displayed HERE';
+        em.style.display = '';
+        $('ch-png').disabled = true;
+        $('ch-ppt').disabled = true;
+        $('ch-status').textContent = '';
+        return;
+      }
       if (!state.override) buildNums(data);
       var total = data.reduce(function (s, d) { return s + d[1]; }, 0);
 
@@ -363,7 +492,7 @@
       ctx.fillStyle = '#FFFFFF';
       ctx.fillRect(0, 0, W, H);
 
-      var fBody = 'Candara, "Gill Sans", Calibri, sans-serif';
+      var fBody = state.fontFamily + ', Candara, "Gill Sans", sans-serif';
       var labPx = Math.round(0.026 * H * state.labelScale);
 
       if (state.chart === 'bar') {
@@ -425,7 +554,7 @@
 
       $('ch-png').disabled = false;
       $('ch-ppt').disabled = false;
-      $('ch-status').textContent = 'n = ' + total + ' · ' + data.length + ' categories · ' + W + '×' + H;
+      $('ch-status').textContent = 'n = ' + total + ' · ' + data.length + ' categories · ' + W + 'x' + H;
     }
 
     /* ---------- events ---------- */
@@ -445,11 +574,18 @@
     $('ch-filtercol').addEventListener('change', function (e) {
       state.filterCol = +e.target.value; state.includeValues = null; state.override = null; buildFilterValues(); scheduleRender();
     });
-    $('ch-gender').addEventListener('click', function () { tryPreset('gender', false); });
-    $('ch-race').addEventListener('click', function () { tryPreset('race', false); });
-    $('ch-col').addEventListener('change', function (e) {
-      var v = +e.target.value;
-      if (v >= 0) { state.cols = [v]; state.override = null; $('ch-presetnote').textContent = ''; scheduleRender(); }
+    $('ch-mode').addEventListener('change', function (e) {
+      state.mode = e.target.value;
+      $('ch-colrow').style.display = state.mode === 'single' ? '' : 'none';
+      $('ch-combine-block').style.display = state.mode === 'combine' ? '' : 'none';
+      state.override = null;
+      applyMode();
+      scheduleRender();
+    });
+    $('ch-col').addEventListener('change', function () {
+      applyMode();
+      state.override = null;
+      scheduleRender();
     });
     $('ch-addnum').addEventListener('click', function () {
       state.override = readNums();
@@ -465,9 +601,10 @@
     $('ch-color').addEventListener('input', function (e) { state.barColor = e.target.value; scheduleRender(); });
     $('ch-ls').addEventListener('input', function (e) {
       state.labelScale = parseFloat(e.target.value);
-      $('ch-ls-o').textContent = state.labelScale.toFixed(2).replace(/0$/, '') + '×';
+      $('ch-ls-o').textContent = state.labelScale.toFixed(2).replace(/0$/, '') + 'x';
       scheduleRender();
     });
+    $('ch-font').addEventListener('change', function (e) { state.fontFamily = e.target.value; scheduleRender(); });
     $('ch-dims').addEventListener('change', function (e) { state.dims = e.target.value; scheduleRender(); });
 
     // deterministic demo roster (counts land close to the real slides)

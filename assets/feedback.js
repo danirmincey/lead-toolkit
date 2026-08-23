@@ -232,7 +232,6 @@
       '  </div>' +
       '  <div class="fb-lists">' +
       '    <div id="fb-mine"></div>' +
-      '    <div id="fb-all"></div>' +
       '  </div>' +
       '</div>';
     document.body.appendChild(pill);
@@ -291,11 +290,10 @@
       loadSheet(function () { renderMine(); renderAll(); });
     }
     function closePanel() {
+      // the draft (message, type, scope, editing state) SURVIVES closing;
+      // only a successful Send clears it
       backdrop.style.display = 'none';
       panel.style.display = 'none';
-      editing = null;
-      $('fb-msg').value = '';
-      $('fb-status').textContent = '';
     }
 
     $('fb-type').addEventListener('change', function () {
@@ -340,11 +338,14 @@
       var box = $('fb-mine');
       var uni = $('fb-uni').value.trim().toLowerCase();
       var byId = new Map();
-      sheet.claims.forEach(function (c) { if (uni && c.uni === uni) byId.set(c.claimId, c); });
-      loadClaims().forEach(function (c) {
-        var prev = byId.get(c.claimId);
-        if (!prev || (c.rev || 0) >= prev.rev) byId.set(c.claimId, c);
-      });
+      if (uni) {
+        sheet.claims.forEach(function (c) { if (c.uni === uni) byId.set(c.claimId, c); });
+        loadClaims().forEach(function (c) {
+          if ((c.uni || '') !== uni) return;   // ghost-note fix: UNI must match
+          var prev = byId.get(c.claimId);
+          if (!prev || (c.rev || 0) >= prev.rev) byId.set(c.claimId, c);
+        });
+      }
       var mine = Array.from(byId.values());
       editable = {};
       mine.forEach(function (c) { editable[c.claimId] = c; });
@@ -363,15 +364,16 @@
         if (b === 'GENERAL') return -1;
         return a.localeCompare(b);
       });
-      var h = '';
+      var h = '<details class="fb-minewrap"><summary>Your earlier notes (' + mine.length + ') · click to expand</summary>';
       keys.forEach(function (k) {
-        h += '<div class="fb-listtitle">Your notes · ' + esc(appName(k)) + '</div>';
+        h += '<div class="fb-listtitle">' + esc(appName(k)) + '</div>';
         groups.get(k).forEach(function (c) {
           h += '<div class="fb-item"><span class="fb-itemtype">' + esc(c.type) + '</span> ' +
             esc(c.message).slice(0, 120) +
             ' <a href="#" data-edit="' + esc(c.claimId) + '">✏ edit</a></div>';
         });
       });
+      h += '</details>';
       box.innerHTML = h;
       Array.prototype.forEach.call(box.querySelectorAll('a[data-edit]'), function (a) {
         a.addEventListener('click', function (e) {
@@ -388,24 +390,9 @@
       });
     }
 
-    /* everyone's notes: this app first, then General (from the cached sheet) */
-    function renderAll() {
-      var box = $('fb-all');
-      box.innerHTML = '';
-      var code = currentCode();
-      var h = '';
-      var buckets = code ? [code, 'GENERAL'] : ['GENERAL'];
-      buckets.forEach(function (k) {
-        var claims = sheet.claims.filter(function (c) { return c.appCode === k; });
-        if (!claims.length) return;
-        h += '<div class="fb-listtitle">Everyone’s notes · ' + esc(appName(k)) + '</div>';
-        claims.slice(0, 8).forEach(function (c) {
-          h += '<div class="fb-item"><span class="fb-itemtype">' + esc(c.type) + '</span> ' +
-            esc(c.message).slice(0, 140) + ' <span class="fb-who">' + esc(c.uni || c.name) + '</span></div>';
-        });
-      });
-      box.innerHTML = h;
-    }
+    // "Everyone's notes" removed on Dani's feedback: the Sheet is the
+    // shared view; the widget only shows YOUR notes (by UNI)
+    function renderAll() { }
 
     $('fb-send').addEventListener('click', function () {
       var uni = $('fb-uni').value.trim().toLowerCase();

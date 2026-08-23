@@ -5,7 +5,8 @@
    each group Abhas / Bussan (renameable). As many groups as the class size
    needs (teams = 2 × ceil(n/6), which guarantees the max-3 rule).
    Preview mirrors the slide (green/lavender sides, navy group headers,
-   three column strips) and exports a native editable PowerPoint table.
+   centered rows of group blocks, numbered row-wise) and exports a native
+   editable PowerPoint table.
    ========================================================================== */
 
 (function () {
@@ -42,6 +43,25 @@
     var base = Math.floor(n / teams), rem = n % teams, out = [];
     for (var i = 0; i < teams; i++) out.push(base + (i < rem ? 1 : 0));
     return out;
+  }
+
+  // groups per row in the figure and on the slide
+  var GROUPS_PER_ROW = 4;
+
+  /* rowSplit: split g groups into centered rows of about `cols` groups each.
+     Remainder 0 -> even full rows (12 -> [4,4,4]); remainder 1 -> the middle
+     row absorbs the extra (13 -> [4,5,4]); remainder 2+ -> the extras form
+     their own centered bottom row (14 -> [4,4,4,2]). Groups are numbered
+     ROW-WISE: 1 2 3 4 across the first row, then continuing. */
+  function rowSplit(g, cols) {
+    if (!g || g < 1) return [];
+    if (!cols || cols < 1) cols = 1;
+    if (g <= cols) return [g];
+    var full = Math.floor(g / cols), rem = g % cols, rows = [], i;
+    for (i = 0; i < full; i++) rows.push(cols);
+    if (rem === 1) rows[Math.floor(full / 2)] += 1;
+    else if (rem > 1) rows.push(rem);
+    return rows;
   }
 
   // returns array of teams (arrays of people indices); teams 2i & 2i+1 = group i
@@ -89,25 +109,34 @@
       '        <input type="file" id="ng-file" accept=".csv,.tsv,.txt,.xlsx,.xlsm,.xltx" style="display:none">' +
       '        <div id="ng-fileinfo"></div>' +
       '        <label class="field" id="ng-sheetrow" style="display:none">Sheet<select id="ng-sheet"></select></label>' +
+      '        <div class="clusterblock" id="ng-filterblock" style="display:none">' +
+      '          <div class="clusterlabel">Select cluster(s)</div>' +
+      '          <label class="field">Cluster column<select id="ng-filtercol"></select></label>' +
+      '          <div id="ng-filtervals"></div>' +
+      '        </div>' +
+      '        <div class="row"><button id="ng-sample" class="fixed">🎲 Demo data</button></div>' +
+      '      </div>' +
+      '    </details>' +
+
+      '    <details class="step" open>' +
+      '      <summary><span class="n">2</span> Names</summary>' +
+      '      <div class="body">' +
       '        <div id="ng-cols" style="display:none">' +
       '          <div class="row">' +
       '            <label class="field">Name column<select id="ng-namecol"></select></label>' +
       '            <label class="field">+ second<select id="ng-namecol2"></select></label>' +
       '          </div>' +
-      '          <label class="field">Filter people<select id="ng-filtercol"></select></label>' +
-      '          <div id="ng-filtervals"></div>' +
       '        </div>' +
       '        <div class="row">' +
       '          <input type="text" id="ng-addname" placeholder="add a name by hand…">' +
       '          <button id="ng-addbtn" class="fixed">＋</button>' +
       '        </div>' +
-      '        <div class="row"><button id="ng-sample" class="fixed">🎲 Demo data</button></div>' +
       '        <div class="small-note">To adjust: click a name, click its new team, or just drag it. ✕ unassigns.</div>' +
       '      </div>' +
       '    </details>' +
 
       '    <details class="step disabled" open>' +
-      '      <summary><span class="n">2</span> Roles & look</summary>' +
+      '      <summary><span class="n">3</span> Roles & look</summary>' +
       '      <div class="body">' +
       '        <div class="row">' +
       '          <label class="field">Side 1<input type="text" id="ng-sidea" value="Abhas"></label>' +
@@ -133,7 +162,7 @@
       '    </div>' +
       '    <div class="grp-wrap">' +
       '      <div class="empty-msg" id="ng-empty">output displayed HERE</div>' +
-      '      <div id="ng-table" style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;align-items:start"></div>' +
+      '      <div id="ng-table" style="display:flex;flex-direction:column;gap:12px"></div>' +
       '      <div class="grp-pool" id="ng-pool" style="display:none"></div>' +
       '    </div>' +
       '  </div>' +
@@ -218,6 +247,7 @@
       state.filterCol = -1; state.includeValues = null;
       $('ng-fileinfo').innerHTML = '<span class="file-info">✓ ' + escapeHtml(name) + ' · ' + state.rows.length + ' rows</span>';
       $('ng-cols').style.display = '';
+      $('ng-filterblock').style.display = '';
 
       var first = state.headers.findIndex(function (h) { return /first/i.test(h); });
       var last = state.headers.findIndex(function (h) { return /last/i.test(h); });
@@ -247,23 +277,81 @@
         uniq.set(v, (uniq.get(v) || 0) + 1);
       });
       if (uniq.size > 40) { state.includeValues = null; return; }
-      if (state.includeValues === null) state.includeValues = new Set(uniq.keys());
+      // cluster-picker doctrine: default to NONE unless exactly one unique value
+      if (state.includeValues === null) {
+        if (uniq.size === 1) {
+          state.includeValues = new Set(uniq.keys());
+        } else {
+          state.includeValues = new Set();
+        }
+      }
+
+      var btnRow = document.createElement('div');
+      btnRow.className = 'row';
+      btnRow.style.marginBottom = '4px';
+      var selAll = document.createElement('button');
+      selAll.className = 'fixed';
+      selAll.textContent = 'Select all';
+      var clrAll = document.createElement('button');
+      clrAll.className = 'fixed';
+      clrAll.textContent = 'Clear all';
+      btnRow.appendChild(selAll);
+      btnRow.appendChild(clrAll);
+      box.appendChild(btnRow);
+
       var list = document.createElement('div');
       list.className = 'value-list';
+
+      function refreshLabels() {
+        Array.prototype.forEach.call(list.querySelectorAll('label'), function (lab) {
+          var inp = lab.querySelector('input');
+          var v2 = inp.getAttribute('data-v');
+          var on = state.includeValues.has(v2);
+          inp.checked = on;
+          lab.className = on ? 'on' : '';
+        });
+      }
+
       Array.from(uniq.keys()).sort().forEach(function (v) {
         var lab = document.createElement('label');
         var on = state.includeValues.has(v);
         lab.className = on ? 'on' : '';
-        lab.innerHTML = '<input type="checkbox" ' + (on ? 'checked' : '') + '> ' +
+        lab.innerHTML = '<input type="checkbox" data-v="' + escapeHtml(v) + '" ' + (on ? 'checked' : '') + '> ' +
           (v === '' ? '(blank)' : escapeHtml(v)) + ' <span class="cnt">' + uniq.get(v) + '</span>';
         lab.querySelector('input').addEventListener('change', function (e) {
           if (e.target.checked) state.includeValues.add(v); else state.includeValues.delete(v);
           lab.className = e.target.checked ? 'on' : '';
+          updateNote();
           rebuildPeople();
         });
         list.appendChild(lab);
       });
       box.appendChild(list);
+
+      var note = document.createElement('div');
+      note.id = 'ng-clusternote';
+      note.className = 'small-note';
+      note.style.marginTop = '4px';
+      box.appendChild(note);
+
+      function updateNote() {
+        note.textContent = (state.includeValues && state.includeValues.size === 0 && uniq.size > 1)
+          ? 'tick your cluster(s) to continue' : '';
+      }
+      updateNote();
+
+      selAll.addEventListener('click', function () {
+        state.includeValues = new Set(uniq.keys());
+        refreshLabels();
+        updateNote();
+        rebuildPeople();
+      });
+      clrAll.addEventListener('click', function () {
+        state.includeValues = new Set();
+        refreshLabels();
+        updateNote();
+        rebuildPeople();
+      });
     }
 
     function rebuildPeople() {
@@ -335,22 +423,26 @@
       if (!state.people.length) { holder.innerHTML = ''; $('ng-pool').style.display = 'none'; return; }
 
       var fs = Math.round(13 * state.textScale);
-      var perStrip = Math.ceil(g / 3);
+      // centered rows of group blocks, numbered row-wise (1 2 3 4 across,
+      // then continuing); fixed header heights keep the headers level
+      var splits = rowSplit(g, GROUPS_PER_ROW);
       var html = '';
-      for (var strip = 0; strip < 3; strip++) {
-        var from = strip * perStrip, to = Math.min(g, from + perStrip);
-        if (from >= to) { html += '<div></div>'; continue; }
-        html += '<table class="grp" style="font-size:' + fs + 'px">';
-        html += '<tr><td style="background:' + state.colA + ';font-weight:700;font-family:var(--font-head)">' + escapeHtml(state.sideA) + '</td>' +
-          '<td style="background:' + state.colB + ';font-weight:700;font-family:var(--font-head)">' + escapeHtml(state.sideB) + '</td></tr>';
-        for (var gi = from; gi < to; gi++) {
-          html += '<tr><td colspan="2" style="background:' + state.headFill + ';color:#fff;font-weight:700;font-family:var(--font-head)">Group ' + (gi + 1) + '</td></tr>';
+      var gi = 0;
+      for (var band = 0; band < splits.length; band++) {
+        html += '<div style="display:flex;gap:12px;justify-content:center;align-items:flex-start">';
+        for (var c = 0; c < splits[band]; c++) {
+          html += '<table class="grp" style="font-size:' + fs + 'px">';
+          html += '<tr><td style="background:' + state.colA + ';font-weight:700;font-family:var(--font-head);height:2em;min-width:96px">' + escapeHtml(state.sideA) + '</td>' +
+            '<td style="background:' + state.colB + ';font-weight:700;font-family:var(--font-head);height:2em;min-width:96px">' + escapeHtml(state.sideB) + '</td></tr>';
+          html += '<tr><td colspan="2" style="background:' + state.headFill + ';color:#fff;font-weight:700;font-family:var(--font-head);height:1.8em">Group ' + (gi + 1) + '</td></tr>';
           html += '<tr>' +
-            '<td class="movable" data-t="' + (2 * gi) + '" style="background:' + state.colA + '">' + (state.teams[2 * gi] || []).map(chipHtml).join('') + '</td>' +
-            '<td class="movable" data-t="' + (2 * gi + 1) + '" style="background:' + state.colB + '">' + (state.teams[2 * gi + 1] || []).map(chipHtml).join('') + '</td>' +
+            '<td class="movable" data-t="' + (2 * gi) + '" style="background:' + state.colA + ';vertical-align:top">' + (state.teams[2 * gi] || []).map(chipHtml).join('') + '</td>' +
+            '<td class="movable" data-t="' + (2 * gi + 1) + '" style="background:' + state.colB + ';vertical-align:top">' + (state.teams[2 * gi + 1] || []).map(chipHtml).join('') + '</td>' +
             '</tr>';
+          html += '</table>';
+          gi++;
         }
-        html += '</table>';
+        html += '</div>';
       }
       holder.innerHTML = html;
 
@@ -414,50 +506,66 @@
     function exportPptx() {
       if (!window.pptxLite || !state.teams.length) return;
       var g = state.teams.length / 2;
-      var CW = 2560, CH = 1440, margin = 60, gap = 40;
-      var stripW = (CW - 2 * margin - 2 * gap) / 3;
-      var colW = stripW / 2;
-      var nameSize = 22 * state.textScale;
+      var CW = 2560, CH = 1440, margin = 60, gap = 40, vgap = 40;
+      // ~12pt on the slide: sizePx = 12 * 12700 * canvasW / 12192000 = 32 at 2560
+      var nameSize = 32 * state.textScale;
       var lineH = nameSize * 1.5;
-      var perStrip = Math.ceil(g / 3);
+
+      // same centered bands as the preview: rowSplit rows, numbered row-wise
+      var splits = rowSplit(g, GROUPS_PER_ROW);
+      var maxPerRow = 1;
+      splits.forEach(function (k) { if (k > maxPerRow) maxPerRow = k; });
+      var blockW = (CW - 2 * margin - (maxPerRow - 1) * gap) / maxPerRow;
+      var colW = blockW / 2;
+
+      // ONE fixed height per row kind, and one shared body height taken from
+      // the longest name list, so every header sits level across the slide
+      var maxLines = 1;
+      state.teams.forEach(function (t) { if (t.length > maxLines) maxLines = t.length; });
+      var sideH = nameSize * 2;
+      var headH = nameSize * 1.8;
+      var bodyH = maxLines * lineH + 18;
 
       var tables = [];
-      for (var strip = 0; strip < 3; strip++) {
-        var from = strip * perStrip, to = Math.min(g, from + perStrip);
-        if (from >= to) continue;
-        var rows = [{
-          h: nameSize * 2,
-          cells: [
-            { fill: state.colA, paras: [{ runs: [{ text: state.sideA, bold: true, color: '#000000' }], sizePx: nameSize, align: 'ctr' }] },
-            { fill: state.colB, paras: [{ runs: [{ text: state.sideB, bold: true, color: '#000000' }], sizePx: nameSize, align: 'ctr' }] }
-          ]
-        }];
-        for (var gi = from; gi < to; gi++) {
-          rows.push({
-            h: nameSize * 1.8,
-            cells: [
-              { span: 2, fill: state.headFill, paras: [{ runs: [{ text: 'Group ' + (gi + 1), bold: true, color: '#FFFFFF' }], sizePx: nameSize, align: 'ctr' }] },
-              { merged: true, fill: state.headFill, paras: [] }
-            ]
-          });
+      var gi = 0, y = margin;
+      for (var band = 0; band < splits.length; band++) {
+        var inRow = splits[band];
+        var x0 = (CW - (inRow * blockW + (inRow - 1) * gap)) / 2;
+        for (var c = 0; c < inRow; c++) {
           var a = (state.teams[2 * gi] || []).map(personById).filter(Boolean);
           var b = (state.teams[2 * gi + 1] || []).map(personById).filter(Boolean);
-          var maxLines = Math.max(a.length, b.length, 1);
-          rows.push({
-            h: maxLines * lineH + 18,
-            cells: [
-              { fill: state.colA, paras: a.map(function (p) { return { runs: [{ text: p.name, color: '#000000' }], sizePx: nameSize, align: 'l' }; }) },
-              { fill: state.colB, paras: b.map(function (p) { return { runs: [{ text: p.name, color: '#000000' }], sizePx: nameSize, align: 'l' }; }) }
+          tables.push({
+            x: x0 + c * (blockW + gap), y: y,
+            colWidths: [colW, colW],
+            border: { color: '#FFFFFF', w: 2.5 },
+            font: 'Candara',
+            rows: [
+              {
+                h: sideH,
+                cells: [
+                  { fill: state.colA, paras: [{ runs: [{ text: state.sideA, bold: true, color: '#000000' }], sizePx: nameSize, align: 'ctr' }] },
+                  { fill: state.colB, paras: [{ runs: [{ text: state.sideB, bold: true, color: '#000000' }], sizePx: nameSize, align: 'ctr' }] }
+                ]
+              },
+              {
+                h: headH,
+                cells: [
+                  { span: 2, fill: state.headFill, paras: [{ runs: [{ text: 'Group ' + (gi + 1), bold: true, color: '#FFFFFF' }], sizePx: nameSize, align: 'ctr' }] },
+                  { merged: true, fill: state.headFill, paras: [] }
+                ]
+              },
+              {
+                h: bodyH,
+                cells: [
+                  { fill: state.colA, paras: a.map(function (p) { return { runs: [{ text: p.name, color: '#000000' }], sizePx: nameSize, align: 'l' }; }) },
+                  { fill: state.colB, paras: b.map(function (p) { return { runs: [{ text: p.name, color: '#000000' }], sizePx: nameSize, align: 'l' }; }) }
+                ]
+              }
             ]
           });
+          gi++;
         }
-        tables.push({
-          x: margin + strip * (stripW + gap), y: margin,
-          colWidths: [colW, colW],
-          border: { color: '#FFFFFF', w: 2.5 },
-          font: 'Candara',
-          rows: rows
-        });
+        y += sideH + headH + bodyH + vgap;
       }
 
       var bytes = window.pptxLite.makePptx({
@@ -563,6 +671,7 @@
       teamPlan: teamPlan,
       teamSizes: teamSizes,
       allotTeams: allotTeams,
+      rowSplit: rowSplit,
       seededShuffle: seededShuffle
     };
   }

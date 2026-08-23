@@ -69,6 +69,13 @@
     return -1;
   }
 
+  function findClusterColumn(names, qtexts) {
+    for (var i = 0; i < names.length; i++) {
+      if (/^cluster$/i.test(String(names[i]).trim()) || /which cluster/i.test(qtexts[i] || '')) return i;
+    }
+    return -1;
+  }
+
   // rank value parser: 1..8 only (guards against junk)
   function parseRank(v) {
     var n = parseFloat(String(v).trim());
@@ -149,40 +156,52 @@
         var svColByLetter = {};
         sv.rankCols.forEach(function (c) { svColByLetter[c.letter] = c.i; });
 
+        // DRRC workbook math (sheet 5): UNPAIRED column means, so students
+        // missing one ranking still count in the other pool.
+        // persuasiveness[X] = mean(T1 of X, non-advocates) - mean(T2 of X, non-advocates)
         persuasion = [];
         out.rankCols.forEach(function (c) {
           if (!(c.letter in svColByLetter)) return;
-          var diffs = [];
-          outRows.forEach(function (r) {
-            if (r._rep === c.letter) return;             // non-advocates only
-            var u = normUni(out.uniIdx >= 0 ? r[out.uniIdx] : '');
-            var s = u && svByUni[u];
-            if (!s) return;
+          var advUnis = advocatesOf[c.letter] || {};
+          var t1s = [], t2s = [];
+          sv.rows.forEach(function (s) {
+            var u = normUni(sv.uniIdx >= 0 ? s[sv.uniIdx] : '');
+            if (u && advUnis[u]) return;                 // advocates excluded
             var t1 = parseRank(s[svColByLetter[c.letter]]);
-            var t2 = parseRank(r[c.i]);
-            if (t1 === null || t2 === null) return;
-            diffs.push(t1 - t2);                          // + = moved toward candidate
+            if (t1 !== null) t1s.push(t1);
           });
-          if (diffs.length) persuasion.push({ letter: c.letter, diff: mean(diffs), n: diffs.length });
+          outRows.forEach(function (r) {
+            if (r._rep === c.letter) return;
+            var t2 = parseRank(r[c.i]);
+            if (t2 !== null) t2s.push(t2);
+          });
+          if (t1s.length && t2s.length) {
+            persuasion.push({ letter: c.letter, diff: mean(t1s) - mean(t2s), n: t2s.length });
+          }
         });
         persuasion.sort(function (a, b) { return b.diff - a.diff; });
         if (!persuasion.length) persuasion = null;
 
-        // advocates' own-candidate movement (R1−R2), needs the join too
+        // Advocacy Version A (workbook): advocates' own candidate,
+        // mean(T1 pool) - mean(T2 pool), also unpaired
         var advDelta = {};
         out.rankCols.forEach(function (c) {
-          var diffs = [];
+          var advUnis = advocatesOf[c.letter] || {};
+          var t1s = [], t2s = [];
+          sv.rows.forEach(function (s) {
+            var u = normUni(sv.uniIdx >= 0 ? s[sv.uniIdx] : '');
+            if (!(u && advUnis[u])) return;              // advocates only
+            var t1 = parseRank(s[svColByLetter[c.letter]]);
+            if (t1 !== null) t1s.push(t1);
+          });
           outRows.forEach(function (r) {
             if (r._rep !== c.letter) return;
-            var u = normUni(out.uniIdx >= 0 ? r[out.uniIdx] : '');
-            var s = u && svByUni[u];
-            if (!s) return;
-            var t1 = parseRank(s[svColByLetter[c.letter]]);
             var t2 = parseRank(r[c.i]);
-            if (t1 === null || t2 === null) return;
-            diffs.push(t1 - t2);
+            if (t2 !== null) t2s.push(t2);
           });
-          if (diffs.length) advDelta[c.letter] = { d: mean(diffs), n: diffs.length };
+          if (t1s.length && t2s.length) {
+            advDelta[c.letter] = { d: mean(t1s) - mean(t2s), n: t2s.length };
+          }
         });
         if (Object.keys(advDelta).length) result_advDelta = advDelta;
 
@@ -213,6 +232,7 @@
       out: null,   // {fileName, headers, qtexts, rows, rankCols, repIdx, uniIdx}
       sv: null,    // {fileName, headers, qtexts, rows, rankCols, uniIdx}
       excludeTest: true,
+      includeClusters: null,
       clusterLabel: 'Cluster H',
       // defaults for the "Other clusters" comparison slide (last year's
       // numbers | no other-cluster data has been provided; fully editable)
@@ -235,6 +255,10 @@
       '        <div class="dropzone" id="kd-drop1"><strong>DROP DATA HERE</strong><ul class="drop-spec"><li><b>Type of file:</b> CSV or Excel (.xlsx)</li><li><b>What you\'re looking for:</b> the ad-hoc "Kidney Outcomes" export run in class (CANDIDATE - A - RANK … columns plus "Which candidate did you represent?")</li></ul></div>' +
       '        <input type="file" id="kd-file1" accept=".csv,.tsv,.txt,.xlsx,.xlsm,.xltx" style="display:none">' +
       '        <div id="kd-info1"></div>' +
+      '        <div class="clusterblock" id="kd-clusterblock" style="display:none">' +
+      '          <div class="clusterlabel">Select cluster(s)</div>' +
+      '          <div id="kd-filtervals"></div>' +
+      '        </div>' +
       '      </div>' +
       '    </details>' +
 
@@ -336,8 +360,11 @@
               rows: sq.rows,
               rankCols: findRankColumns(sq.names, sq.qtexts),
               repIdx: findRepColumn(sq.names, sq.qtexts),
-              uniIdx: findUniColumn(sq.names, sq.qtexts)
+              uniIdx: findUniColumn(sq.names, sq.qtexts),
+              clusterIdx: findClusterColumn(sq.names, sq.qtexts)
             };
+            state.includeClusters = null;
+            buildClusterVals();
             var ok = state.out.rankCols.length >= 2;
             $('kd-info1').innerHTML = ok
               ? '<span class="file-info">✓ ' + escapeHtml(file.name) + ' · ' + sq.rows.length + ' responses · ' +
@@ -546,7 +573,9 @@
 
     function exportDeck() {
       if (!window.pptxLite || !state.out) return;
-      var res = kidneyStats(state.out, state.sv, state.excludeTest);
+      var fo = filteredOut();
+      if (!fo.rows.length) return;
+      var res = kidneyStats(fo, state.sv, state.excludeTest);
       var spec = buildDeck(res);
       var bytes = window.pptxLite.makePptx(spec);
       var blob = new Blob([bytes], { type: 'application/vnd.openxmlformats-officedocument.presentationml.presentation' });
@@ -560,6 +589,111 @@
       $('kd-status').textContent = '✓ deck exported (' + spec.slides.length + ' slides)';
     }
 
+    /* ---------- cluster picker (canonical Load-data block) ---------- */
+
+    function buildClusterVals() {
+      var box = $('kd-filtervals');
+      box.innerHTML = '';
+      $('kd-clusterblock').style.display = '';
+      var o = state.out;
+      if (!o || o.clusterIdx == null || o.clusterIdx === -1) {
+        box.innerHTML = '<div class="small-note">(no cluster column found in this file; using every response)</div>';
+        state.includeClusters = null;
+        return;
+      }
+      var uniq = new Map();
+      o.rows.forEach(function (r) {
+        var v = String(r[o.clusterIdx] === undefined ? '' : r[o.clusterIdx]).trim();
+        uniq.set(v, (uniq.get(v) || 0) + 1);
+      });
+      if (!uniq.size) {
+        box.innerHTML = '<div class="small-note">(no cluster values found; using every response)</div>';
+        state.includeClusters = null;
+        return;
+      }
+
+      // cluster-picker doctrine: default to NONE unless exactly one unique value
+      if (state.includeClusters === null) {
+        state.includeClusters = uniq.size === 1 ? new Set(uniq.keys()) : new Set();
+      }
+
+      var btnRow = document.createElement('div');
+      btnRow.className = 'row';
+      btnRow.style.marginBottom = '4px';
+      var selAll = document.createElement('button');
+      selAll.className = 'fixed';
+      selAll.textContent = 'Select all';
+      var clrAll = document.createElement('button');
+      clrAll.className = 'fixed';
+      clrAll.textContent = 'Clear all';
+      btnRow.appendChild(selAll);
+      btnRow.appendChild(clrAll);
+      box.appendChild(btnRow);
+
+      var list = document.createElement('div');
+      list.className = 'value-list';
+
+      function refreshLabels() {
+        Array.prototype.forEach.call(list.querySelectorAll('label'), function (lab) {
+          var inp = lab.querySelector('input');
+          var on = state.includeClusters.has(inp.getAttribute('data-v'));
+          inp.checked = on;
+          lab.className = on ? 'on' : '';
+        });
+      }
+
+      Array.from(uniq.keys()).sort(function (a, b) { return a.localeCompare(b, undefined, { numeric: true }); }).forEach(function (v) {
+        var lab = document.createElement('label');
+        var on = state.includeClusters.has(v);
+        lab.className = on ? 'on' : '';
+        lab.innerHTML = '<input type="checkbox" data-v="' + escapeHtml(v) + '" ' + (on ? 'checked' : '') + '> ' +
+          (v === '' ? '(blank)' : escapeHtml(v)) + ' <span class="cnt">' + uniq.get(v) + '</span>';
+        lab.querySelector('input').addEventListener('change', function (e) {
+          if (e.target.checked) state.includeClusters.add(v); else state.includeClusters.delete(v);
+          lab.className = e.target.checked ? 'on' : '';
+          updateNote();
+          refresh();
+        });
+        list.appendChild(lab);
+      });
+      box.appendChild(list);
+
+      var note = document.createElement('div');
+      note.id = 'kd-clusternote';
+      note.className = 'small-note';
+      note.style.marginTop = '4px';
+      box.appendChild(note);
+
+      function updateNote() {
+        note.textContent = (state.includeClusters && state.includeClusters.size === 0 && uniq.size > 1)
+          ? 'tick your cluster(s) to continue' : '';
+      }
+      updateNote();
+
+      selAll.addEventListener('click', function () {
+        state.includeClusters = new Set(uniq.keys());
+        refreshLabels();
+        updateNote();
+        refresh();
+      });
+      clrAll.addEventListener('click', function () {
+        state.includeClusters = new Set();
+        refreshLabels();
+        updateNote();
+        refresh();
+      });
+    }
+
+    // outcomes restricted to the ticked cluster(s)
+    function filteredOut() {
+      var o = state.out;
+      if (!o || o.clusterIdx == null || o.clusterIdx === -1 || !state.includeClusters) return o;
+      var rows = o.rows.filter(function (r) {
+        return state.includeClusters.has(String(r[o.clusterIdx] === undefined ? '' : r[o.clusterIdx]).trim());
+      });
+      return { fileName: o.fileName, rows: rows, rankCols: o.rankCols, repIdx: o.repIdx, uniIdx: o.uniIdx };
+    }
+
     /* ---------- report ---------- */
 
     function f2(x) { return isNaN(x) ? '-' : x.toFixed(2); }
@@ -568,12 +702,22 @@
       if (!state.out || state.out.rankCols.length < 2) {
         $('kd-out').style.display = 'none';
         $('kd-empty').style.display = '';
+        $('kd-empty').textContent = 'output displayed HERE';
+        $('kd-copy').disabled = true;
+        $('kd-deck').disabled = true;
+        return;
+      }
+      var fo = filteredOut();
+      if (!fo.rows.length) {
+        $('kd-out').style.display = 'none';
+        $('kd-empty').style.display = '';
+        $('kd-empty').textContent = 'tick your cluster(s) above to continue';
         $('kd-copy').disabled = true;
         $('kd-deck').disabled = true;
         return;
       }
       $('kd-deck').disabled = false;
-      var res = kidneyStats(state.out, state.sv, state.excludeTest);
+      var res = kidneyStats(fo, state.sv, state.excludeTest);
       var L = [];
       L.push('=== KIDNEY EXERCISE | outcomes ===');
       L.push('Round 2 file: ' + state.out.fileName + ' (' + res.n2 + ' responses' +
@@ -637,7 +781,7 @@
         L.push('(add the nightly survey file to also get Round 1, Persuasiveness, and the full picture)');
         L.push('');
       }
-      L.push('- generated by LEAD Toolkit · all processing local -');
+      L.push('- generated by LEAD Toolkit -');
 
       $('kd-out').value = L.join('\n');
       $('kd-out').style.display = '';
@@ -682,8 +826,11 @@
         fileName: 'demo data', rows: sq1.rows,
         rankCols: findRankColumns(sq1.names, sq1.qtexts),
         repIdx: findRepColumn(sq1.names, sq1.qtexts),
-        uniIdx: findUniColumn(sq1.names, sq1.qtexts)
+        uniIdx: findUniColumn(sq1.names, sq1.qtexts),
+        clusterIdx: -1
       };
+      state.includeClusters = null;
+      buildClusterVals();
       $('kd-info1').innerHTML = '<span class="file-info">✓ demo data · 48 responses</span>';
       var sq2 = splitQualtrics(svRaw);
       state.sv = {

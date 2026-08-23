@@ -230,7 +230,11 @@
       colorOrder: 'random', seed: 20260821,
       borderW: 2, borderC: '#FFFFFF',
       labelScale: 1, showCounts: true,
-      showTitle: false, titleText: '', titleDirty: false, titleColor: '#2E74B5',
+      headerFont: 'Corbel', bodyFont: 'Candara',
+      headPctScale: 1, headLabScale: 1, countScale: 1,
+      synth: {},                     // colIndex -> [[label, count], ...] added by hand
+      filterCol: -1, includeValues: null,
+      showTitle: true, titleText: '', titleDirty: false, titleColor: '#2E74B5',
       showHeaders: true, headL: '', headR: '', headLDirty: false, headRDirty: false,
       showVeil: true, veilLabel: 'United States', veilColor: '#0B2A5B', veilAlpha: 0.55,
       showTotals: true,
@@ -251,6 +255,11 @@
       '        <div id="dm-fileinfo"></div>' +
       '        <label class="field" id="dm-sheetrow" style="display:none">Sheet' +
       '          <select id="dm-sheet"></select></label>' +
+      '        <div class="clusterblock" id="dm-clusterblock" style="display:none">' +
+      '          <div class="clusterlabel">Select cluster(s)</div>' +
+      '          <label class="field">Cluster column<select id="dm-filtercol"></select></label>' +
+      '          <div id="dm-filtervals"></div>' +
+      '        </div>' +
       '        <div class="row"><button id="dm-sample" class="fixed">🎲 Demo data</button></div>' +
       '      </div>' +
       '    </details>' +
@@ -297,8 +306,24 @@
       '            <option value="desc">Darkest = biggest</option>' +
       '            <option value="asc">Lightest = biggest</option>' +
       '          </select></label>' +
-      '        <div class="slider-field"><div class="top">Label size <output id="dm-lab-o">1.0×</output></div>' +
+      '        <div class="row">' +
+      '          <label class="field">Header font' +
+      '            <select id="dm-hfont">' +
+      '              <option selected>Corbel</option><option>Candara</option><option>Arial</option><option>Georgia</option><option>Calibri</option>' +
+      '            </select></label>' +
+      '          <label class="field">Body font' +
+      '            <select id="dm-bfont">' +
+      '              <option>Corbel</option><option selected>Candara</option><option>Arial</option><option>Georgia</option><option>Calibri</option>' +
+      '            </select></label>' +
+      '        </div>' +
+      '        <div class="slider-field"><div class="top">Header % size <output id="dm-hpct-o">1.0×</output></div>' +
+      '          <input type="range" id="dm-hpct" min="0.5" max="2" step="0.05" value="1"></div>' +
+      '        <div class="slider-field"><div class="top">Header label size <output id="dm-hlab-o">1.0×</output></div>' +
+      '          <input type="range" id="dm-hlab" min="0.5" max="2" step="0.05" value="1"></div>' +
+      '        <div class="slider-field"><div class="top">Tile label size <output id="dm-lab-o">1.0×</output></div>' +
       '          <input type="range" id="dm-lab" min="0.5" max="2" step="0.05" value="1"></div>' +
+      '        <div class="slider-field"><div class="top">"n (%)" size <output id="dm-cnt-o">1.0×</output></div>' +
+      '          <input type="range" id="dm-cnt" min="0.5" max="2" step="0.05" value="1"></div>' +
       '        <label class="check"><input type="checkbox" id="dm-counts" checked> Show "n (x.x%)" labels</label>' +
       '        <div class="row">' +
       '          <label class="field">Border width<input type="number" id="dm-bw" min="0" max="12" value="2"></label>' +
@@ -306,7 +331,7 @@
       '        </div>' +
       '        <hr style="border:none;border-top:1px solid var(--line);margin:2px 0">' +
       '        <div id="dm-titleopts">' +
-      '          <label class="check"><input type="checkbox" id="dm-title"> Title above the plot</label>' +
+      '          <label class="check"><input type="checkbox" id="dm-title" checked> Title above the plot</label>' +
       '          <div class="row">' +
       '            <input type="text" id="dm-titletext" placeholder="e.g. College Majors">' +
       '            <input type="color" id="dm-titlecolor" value="#2E74B5" class="fixed" style="width:42px">' +
@@ -325,7 +350,7 @@
       '            <input type="color" id="dm-veilcolor" value="#0B2A5B" class="fixed" style="width:42px">' +
       '          </div>' +
       '          <div class="slider-field"><div class="top">Veil opacity <output id="dm-veilo-o">55%</output></div>' +
-      '            <input type="range" id="dm-veilo" min="0" max="90" step="5" value="55"></div>' +
+      '            <input type="range" id="dm-veilo" min="0" max="100" step="5" value="55"></div>' +
       '          <label class="check"><input type="checkbox" id="dm-totals" checked> Corner total on the domestic panel ("51 (66.2%)")</label>' +
       '        </div>' +
       '        <label class="field">Image size' +
@@ -477,7 +502,19 @@
       state.headers = dedupeHeaders(raw[0]);
       state.rows = raw.slice(1);
       state.excluded = {};
+      state.synth = {};
       state.titleDirty = false; state.headLDirty = false; state.headRDirty = false;
+
+      // cluster doctrine: detect the filter column, default NOTHING ticked
+      state.filterCol = detectClusterCol();
+      state.includeValues = null;
+      $('dm-filtercol').innerHTML = '<option value="-1">- no filter -</option>' +
+        state.headers.map(function (hh, i) {
+          return '<option value="' + i + '">' + escapeHtml(hh) + '</option>';
+        }).join('');
+      $('dm-filtercol').value = String(state.filterCol);
+      $('dm-clusterblock').style.display = '';
+      buildFilterValues();
 
       $('dm-fileinfo').innerHTML = '<span class="file-info">✓ ' + escapeHtml(name) + ' · ' +
         state.rows.length + ' rows × ' + state.headers.length + ' columns</span>';
@@ -538,6 +575,109 @@
       return state.excluded[ci];
     }
 
+    /* ---------- cluster filter (rows are filtered BEFORE counting) ---------- */
+
+    function includedRows() {
+      if (state.filterCol < 0 || state.includeValues === null) return state.rows;
+      return state.rows.filter(function (r) {
+        var v = String(r[state.filterCol] === undefined ? '' : r[state.filterCol]).trim();
+        return state.includeValues.has(v);
+      });
+    }
+
+    function filterGateActive() {
+      return state.filterCol >= 0 && state.includeValues !== null && state.includeValues.size === 0;
+    }
+
+    // header matching /cluster/i wins; else a column whose repeated values
+    // suggest groups (2-8 uniques, each 5-150 rows, covering most rows)
+    function detectClusterCol() {
+      var i, h = state.headers;
+      for (i = 0; i < h.length; i++) if (/cluster/i.test(h[i])) return i;
+      var nRows = state.rows.length;
+      if (nRows < 10) return -1;
+      for (i = 0; i < h.length; i++) {
+        var uniq = new Map(), filled = 0;
+        for (var r = 0; r < nRows; r++) {
+          var v = String(state.rows[r][i] === undefined || state.rows[r][i] === null ? '' : state.rows[r][i]).trim();
+          if (!v) continue;
+          filled++;
+          uniq.set(v, (uniq.get(v) || 0) + 1);
+        }
+        if (uniq.size < 2 || uniq.size > 8) continue;
+        if (filled < nRows * 0.9) continue;
+        var ok = true;
+        uniq.forEach(function (n) { if (n > 150 || n < 5) ok = false; });
+        if (ok) return i;
+      }
+      return -1;
+    }
+
+    function buildFilterValues() {
+      var box = $('dm-filtervals');
+      box.innerHTML = '';
+      if (state.filterCol < 0 || !state.rows.length) { state.includeValues = null; return; }
+      var uniq = new Map();
+      state.rows.forEach(function (r) {
+        var v = String(r[state.filterCol] === undefined ? '' : r[state.filterCol]).trim();
+        uniq.set(v, (uniq.get(v) || 0) + 1);
+      });
+      if (uniq.size > 40) {
+        box.innerHTML = '<div class="small-note">⚠ too many values in that column.</div>';
+        state.includeValues = null;
+        return;
+      }
+      if (state.includeValues === null) {
+        state.includeValues = new Set();
+        if (uniq.size === 1) uniq.forEach(function (n, v) { state.includeValues.add(v); });
+      }
+      var btns = document.createElement('div');
+      btns.className = 'row';
+      btns.innerHTML = '<button type="button" class="fixed">Select all</button>' +
+        '<button type="button" class="fixed">Clear all</button>';
+      var bs = btns.querySelectorAll('button');
+      bs[0].addEventListener('click', function () {
+        uniq.forEach(function (n, v) { state.includeValues.add(v); });
+        buildFilterValues(); refreshChips(); scheduleRender();
+      });
+      bs[1].addEventListener('click', function () {
+        state.includeValues.clear();
+        buildFilterValues(); refreshChips(); scheduleRender();
+      });
+      box.appendChild(btns);
+      var list = document.createElement('div');
+      list.className = 'value-list';
+      Array.from(uniq.keys()).sort().forEach(function (v) {
+        var lab = document.createElement('label');
+        var on = state.includeValues.has(v);
+        lab.className = on ? 'on' : '';
+        lab.innerHTML = '<input type="checkbox" ' + (on ? 'checked' : '') + '> ' +
+          (v === '' ? '(blank)' : escapeHtml(v)) + ' <span class="cnt">' + uniq.get(v) + '</span>';
+        lab.querySelector('input').addEventListener('change', function (e) {
+          if (e.target.checked) state.includeValues.add(v); else state.includeValues.delete(v);
+          lab.className = e.target.checked ? 'on' : '';
+          refreshChips(); scheduleRender();
+        });
+        list.appendChild(lab);
+      });
+      box.appendChild(list);
+    }
+
+    // countColumn + any hand-added synthetic categories for that column
+    function countWithSynth(rows, ci, excluded) {
+      var list = countColumn(rows, ci, excluded);
+      var extra = state.synth[ci] || [];
+      extra.forEach(function (d) {
+        if (excluded && excluded.has(d[0])) return;
+        for (var i = 0; i < list.length; i++) {
+          if (list[i][0] === d[0]) { list[i] = [list[i][0], list[i][1] + d[1]]; return; }
+        }
+        list.push([d[0], d[1]]);
+      });
+      list.sort(function (a, b) { return b[1] - a[1] || a[0].localeCompare(b[0]); });
+      return list;
+    }
+
     function chipGroup(labelText, ci) {
       var wrap = document.createElement('div');
       var lab = document.createElement('div');
@@ -547,7 +687,7 @@
       var listEl = document.createElement('div');
       listEl.className = 'word-list';
       var ex = excludedFor(ci);
-      countColumn(state.rows, ci, null).forEach(function (d) {
+      countWithSynth(includedRows(), ci, null).forEach(function (d) {
         var chip = document.createElement('span');
         var removed = ex.has(d[0]);
         chip.className = 'chip' + (removed ? ' removed' : '');
@@ -562,6 +702,28 @@
         listEl.appendChild(chip);
       });
       wrap.appendChild(listEl);
+
+      // add a synthetic category (label + count); cleared on new file/column
+      var addRow = document.createElement('div');
+      addRow.className = 'row';
+      addRow.style.marginTop = '6px';
+      addRow.innerHTML = '<input type="text" placeholder="add category" style="flex:1;min-width:0">' +
+        '<input type="number" min="1" value="1" class="fixed" style="width:64px">' +
+        '<button type="button" class="fixed" title="add this category to the plot">+ add</button>';
+      var addLabel = addRow.querySelector('input[type=text]');
+      var addCount = addRow.querySelector('input[type=number]');
+      function doAdd() {
+        var labelTxt = addLabel.value.trim();
+        var n = Math.round(parseFloat(addCount.value));
+        if (!labelTxt || isNaN(n) || n < 1) return;
+        if (!state.synth[ci]) state.synth[ci] = [];
+        state.synth[ci].push([labelTxt, n]);
+        ex.delete(labelTxt);
+        refreshChips(); scheduleRender();
+      }
+      addRow.querySelector('button').addEventListener('click', doAdd);
+      addLabel.addEventListener('keydown', function (e) { if (e.key === 'Enter') doAdd(); });
+      wrap.appendChild(addRow);
       return wrap;
     }
 
@@ -576,8 +738,8 @@
         if (state.cityCol >= 0) box.appendChild(chipGroup('Cities (' + (state.headers[state.cityCol] || '') + ')', state.cityCol));
       }
       var n = state.mode === 'single'
-        ? countColumn(state.rows, state.col, excludedFor(state.col)).length
-        : countColumn(state.rows, state.countryCol, excludedFor(state.countryCol)).length;
+        ? countWithSynth(includedRows(), state.col, excludedFor(state.col)).length
+        : countWithSynth(includedRows(), state.countryCol, excludedFor(state.countryCol)).length;
       $('dm-cathint').textContent = n ? n + ' categories' : '';
     }
 
@@ -661,8 +823,22 @@
       renderTimer = setTimeout(render, immediate ? 0 : 200);
     }
 
+    function fontStack(name) {
+      if (name === 'Georgia') return 'Georgia, "Times New Roman", serif';
+      if (name === 'Arial') return 'Arial, Helvetica, sans-serif';
+      return '"' + name + '", "Segoe UI", Arial, sans-serif';
+    }
+
     function render() {
       if (!state.rows.length) return;
+      if (filterGateActive()) {
+        canvas.style.display = 'none';
+        var em = $('dm-empty');
+        em.textContent = 'tick your cluster(s) above to continue';
+        em.style.display = '';
+        statusEl.textContent = '';
+        return;
+      }
       var d = state.dims.split('x');
       var W = parseInt(d[0], 10), H = parseInt(d[1], 10);
       canvas.style.display = '';
@@ -672,13 +848,15 @@
       ctx.fillStyle = '#FFFFFF';
       ctx.fillRect(0, 0, W, H);
 
-      var font = 'Arial, Helvetica, sans-serif';
+      var font = fontStack(state.bodyFont);
+      var headerFont = fontStack(state.headerFont);
       var nameBase = 0.034 * H * state.labelScale;
       var nameMin = Math.max(7, 0.008 * H);
-      var countBase = nameBase * 0.6;
+      var countBase = 0.034 * H * 0.6 * state.countScale;
       var countMin = Math.max(6, 0.006 * H);
       var common = {
-        canvasW: W, font: font, borderW: state.borderW, borderC: state.borderC,
+        canvasW: W, font: font, headerFont: headerFont,
+        borderW: state.borderW, borderC: state.borderC,
         showCounts: state.showCounts, nameBase: nameBase, nameMin: nameMin,
         countBase: countBase, countMin: countMin
       };
@@ -688,7 +866,7 @@
     }
 
     function renderSingle(ctx, W, H, common) {
-      var items = countColumn(state.rows, state.col, excludedFor(state.col));
+      var items = countWithSynth(includedRows(), state.col, excludedFor(state.col));
       if (!items.length) { statusEl.textContent = 'No values in that column.'; return; }
       var total = items.reduce(function (s, dd) { return s + dd[1]; }, 0);
 
@@ -698,7 +876,7 @@
         var text = state.titleText || autoTitle();
         ctx.fillStyle = state.titleColor;
         ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-        ctx.font = '700 ' + Math.round(band * 0.52) + 'px ' + common.font;
+        ctx.font = '700 ' + Math.round(band * 0.52 * state.headLabScale) + 'px ' + common.headerFont;
         ctx.fillText(text, W / 2, band * 0.52);
         y0 = band;
       }
@@ -713,12 +891,41 @@
       return state.headers[state.col] || '';
     }
 
+    // duo header: the leading "NN%" and the label can be sized separately;
+    // both share the header font and the LEAD blue (state.titleColor)
+    function drawDuoHeader(ctx, text, cx, band, headerFont) {
+      var pctSize = Math.max(6, Math.round(band * 0.46 * state.headPctScale));
+      var labSize = Math.max(6, Math.round(band * 0.46 * state.headLabScale));
+      var m = /^(\d+(?:\.\d+)?\s*%)\s+(.+)$/.exec(String(text).trim());
+      ctx.fillStyle = state.titleColor;
+      ctx.textBaseline = 'alphabetic';
+      var baseY = band * 0.66;
+      if (m) {
+        ctx.font = '700 ' + pctSize + 'px ' + headerFont;
+        var wp = ctx.measureText(m[1]).width;
+        ctx.font = '700 ' + labSize + 'px ' + headerFont;
+        var sp = ctx.measureText(' ').width;
+        var wl = ctx.measureText(m[2]).width;
+        var x0 = cx - (wp + sp + wl) / 2;
+        ctx.textAlign = 'left';
+        ctx.font = '700 ' + pctSize + 'px ' + headerFont;
+        ctx.fillText(m[1], x0, baseY);
+        ctx.font = '700 ' + labSize + 'px ' + headerFont;
+        ctx.fillText(m[2], x0 + wp + sp, baseY);
+      } else {
+        ctx.textAlign = 'center';
+        ctx.font = '700 ' + labSize + 'px ' + headerFont;
+        ctx.fillText(String(text), cx, baseY);
+      }
+    }
+
     function renderDuo(ctx, W, H, common) {
       if (state.countryCol < 0 || state.cityCol < 0) {
         statusEl.textContent = 'Pick the country and city columns.'; return;
       }
+      var rowsIn = includedRows();
       var exC = excludedFor(state.countryCol);
-      var countryCounts = countColumn(state.rows, state.countryCol, exC);
+      var countryCounts = countWithSynth(rowsIn, state.countryCol, exC);
       var grand = countryCounts.reduce(function (s, dd) { return s + dd[1]; }, 0);
       var domEntry = countryCounts.filter(function (dd) { return dd[0] === state.domesticValue; })[0];
       var domTotal = domEntry ? domEntry[1] : 0;
@@ -727,10 +934,10 @@
       if (!grand) { statusEl.textContent = 'No countries counted.'; return; }
 
       // domestic cities
-      var domRows = state.rows.filter(function (r) {
+      var domRows = rowsIn.filter(function (r) {
         return String(r[state.countryCol] === undefined ? '' : r[state.countryCol]).trim() === state.domesticValue;
       });
-      var cityItems = countColumn(domRows, state.cityCol, excludedFor(state.cityCol));
+      var cityItems = countWithSynth(domRows, state.cityCol, excludedFor(state.cityCol));
       var citySum = cityItems.reduce(function (s, dd) { return s + dd[1]; }, 0);
 
       var domShare = domTotal / grand;
@@ -748,11 +955,8 @@
         var hr = state.headRDirty ? state.headR : (intlPct + '% International Students');
         if (!state.headLDirty) $('dm-headl').value = hl;
         if (!state.headRDirty) $('dm-headr').value = hr;
-        ctx.fillStyle = state.titleColor;
-        ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-        ctx.font = '700 ' + Math.round(band * 0.46) + 'px ' + common.font;
-        ctx.fillText(hl, leftW / 2, band * 0.5);
-        ctx.fillText(hr, leftW + gap + rightW / 2, band * 0.5);
+        drawDuoHeader(ctx, hl, leftW / 2, band, common.headerFont);
+        drawDuoHeader(ctx, hr, leftW + gap + rightW / 2, band, common.headerFont);
         y0 = band;
       }
       var panelH = H - y0;
@@ -767,13 +971,14 @@
       var rightColors = assignColors(rightTiles.length, paletteStops(), state.colorOrder, state.seed + 101);
       drawTiles(ctx, rightTiles, Object.assign({ colors: rightColors, pctDenom: grand }, common));
 
-      // the PowerPoint-style veil over the domestic panel
+      // the PowerPoint-style veil over the domestic panel; at 100% it is a
+      // solid fill drawn AFTER the tiles, so nothing shows through
       if (state.showVeil) {
-        ctx.fillStyle = hexToRgba(state.veilColor, state.veilAlpha);
+        ctx.fillStyle = state.veilAlpha >= 1 ? state.veilColor : hexToRgba(state.veilColor, state.veilAlpha);
         ctx.fillRect(0, y0, leftW, panelH);
         ctx.fillStyle = '#FFFFFF';
         ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-        ctx.font = '700 ' + Math.round(0.034 * leftW) + 'px ' + common.font;
+        ctx.font = '700 ' + Math.round(0.034 * leftW) + 'px ' + common.headerFont;
         ctx.fillText(state.veilLabel, leftW / 2, y0 + panelH / 2);
       }
       if (state.showTotals) {
@@ -844,15 +1049,21 @@
     });
     $('dm-sheet').addEventListener('change', function (e) { useSheet(+e.target.value); });
 
+    $('dm-filtercol').addEventListener('change', function (e) {
+      state.filterCol = +e.target.value; state.includeValues = null;
+      buildFilterValues(); refreshChips(); scheduleRender();
+    });
+
     $('dm-mode').addEventListener('change', function (e) { state.mode = e.target.value; syncModeUI(); scheduleRender(); });
     $('dm-col').addEventListener('change', function (e) {
-      state.col = +e.target.value; state.titleDirty = false; syncModeUI(); scheduleRender();
+      state.col = +e.target.value; state.titleDirty = false; state.synth = {}; syncModeUI(); scheduleRender();
     });
     $('dm-country').addEventListener('change', function (e) {
       state.countryCol = +e.target.value; populateDomesticSelect(); state.headLDirty = state.headRDirty = false;
+      state.synth = {};
       refreshChips(); scheduleRender();
     });
-    $('dm-city').addEventListener('change', function (e) { state.cityCol = +e.target.value; refreshChips(); scheduleRender(); });
+    $('dm-city').addEventListener('change', function (e) { state.cityCol = +e.target.value; state.synth = {}; refreshChips(); scheduleRender(); });
     $('dm-domestic').addEventListener('change', function (e) {
       state.domesticValue = e.target.value; state.headLDirty = state.headRDirty = false; scheduleRender();
     });
@@ -863,6 +1074,23 @@
     $('dm-lab').addEventListener('input', function (e) {
       state.labelScale = parseFloat(e.target.value);
       $('dm-lab-o').textContent = state.labelScale.toFixed(2).replace(/0$/, '') + '×';
+      scheduleRender();
+    });
+    $('dm-hfont').addEventListener('change', function (e) { state.headerFont = e.target.value; scheduleRender(); });
+    $('dm-bfont').addEventListener('change', function (e) { state.bodyFont = e.target.value; scheduleRender(); });
+    $('dm-hpct').addEventListener('input', function (e) {
+      state.headPctScale = parseFloat(e.target.value);
+      $('dm-hpct-o').textContent = state.headPctScale.toFixed(2).replace(/0$/, '') + '×';
+      scheduleRender();
+    });
+    $('dm-hlab').addEventListener('input', function (e) {
+      state.headLabScale = parseFloat(e.target.value);
+      $('dm-hlab-o').textContent = state.headLabScale.toFixed(2).replace(/0$/, '') + '×';
+      scheduleRender();
+    });
+    $('dm-cnt').addEventListener('input', function (e) {
+      state.countScale = parseFloat(e.target.value);
+      $('dm-cnt-o').textContent = state.countScale.toFixed(2).replace(/0$/, '') + '×';
       scheduleRender();
     });
     $('dm-counts').addEventListener('change', function (e) { state.showCounts = e.target.checked; scheduleRender(); });

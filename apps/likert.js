@@ -5,8 +5,9 @@
    red mean-arrow with "Mean = 5.21 (SD = 1.15)" text. NO title inside the
    plot (the slide template provides it). Verified against Fall 2025 data:
    bars 0/1/8/7/14/25/7 and mean 5.21 reproduce the slide exactly.
-   Fonts follow the house style: Corbel for the mean text, Candara for axis
-   labels. Everything is local; PNG export at full resolution.
+   Fonts follow the house style (font picker in Style, Candara default);
+   the mean text stays bold blue. Extracted counts land in an editable
+   Numbers table first. Everything is local; PNG export at full resolution.
    ========================================================================== */
 
 (function () {
@@ -53,9 +54,11 @@
       filterCol: -1, includeValues: null,
       col: -1, K: 7,
       anchors: DEFAULT_ANCHORS.slice(),
+      override: null,               // user-edited numbers win over extraction
       barColor: '#4472C4', showMean: true, meanColor: '#C00000', textBlue: '#2E74B5',
       showCounts: false, yMax: 0,   // 0 = auto
-      dims: '2000x1100'
+      dims: '2000x1100',
+      fontFamily: 'Candara'
     };
 
     container.innerHTML = '' +
@@ -70,16 +73,34 @@
       '        <div class="dropzone" id="lk-drop"><strong>DROP DATA HERE</strong><ul class="drop-spec"><li><b>Type of file:</b> CSV or Excel (.xlsx)</li><li><b>What you\'re looking for:</b> a nightly survey with the self-esteem item (quantselfesteem with numbers 1-7, or a selfesteem column with label answers)</li></ul></div>' +
       '        <input type="file" id="lk-file" accept=".csv,.tsv,.txt,.xlsx,.xlsm,.xltx" style="display:none">' +
       '        <div id="lk-fileinfo"></div>' +
-      '        <div class="row"><button id="lk-demo" class="fixed">🎲 Demo data</button></div>' +
       '        <label class="field" id="lk-sheetrow" style="display:none">Sheet<select id="lk-sheet"></select></label>' +
-      '        <label class="field">Filter people <span class="sub">(optional, e.g. cluster)</span><select id="lk-filtercol"></select></label>' +
-      '        <div id="lk-filtervals"></div>' +
+      '        <div class="clusterblock" id="lk-clusterblock" style="display:none">' +
+      '          <div class="clusterlabel">Select cluster(s)</div>' +
+      '          <label class="field">Cluster column<select id="lk-filtercol"></select></label>' +
+      '          <div id="lk-filtervals"></div>' +
+      '        </div>' +
+      '        <div class="row"><button id="lk-demo" class="fixed">🎲 Demo data</button></div>' +
+      '      </div>' +
+      '    </details>' +
+
+      '    <details class="step disabled" open>' +
+      '      <summary><span class="n">2</span> What to chart</summary>' +
+      '      <div class="body">' +
       '        <label class="field">Column to chart <span class="sub">(auto-finds the self-esteem item)</span><select id="lk-col"></select></label>' +
       '      </div>' +
       '    </details>' +
 
       '    <details class="step disabled" open>' +
-      '      <summary><span class="n">2</span> Scale & anchors</summary>' +
+      '      <summary><span class="n">3</span> Numbers <span class="hint">(editable)</span></summary>' +
+      '      <div class="body">' +
+      '        <div id="lk-nums"></div>' +
+      '        <div class="row"><button id="lk-addnum" class="fixed">+ Add row</button>' +
+      '        <button id="lk-renum" class="fixed">Re-extract</button></div>' +
+      '      </div>' +
+      '    </details>' +
+
+      '    <details class="step disabled" open>' +
+      '      <summary><span class="n">4</span> Scale & anchors</summary>' +
       '      <div class="body">' +
       '        <label class="field">Scale points' +
       '          <select id="lk-k"><option>5</option><option selected>7</option><option>9</option><option>10</option></select></label>' +
@@ -88,7 +109,7 @@
       '    </details>' +
 
       '    <details class="step disabled" open>' +
-      '      <summary><span class="n">3</span> Style</summary>' +
+      '      <summary><span class="n">5</span> Style</summary>' +
       '      <div class="body">' +
       '        <div class="row">' +
       '          <label class="field">Bars<input type="color" id="lk-barcolor" value="#4472C4"></label>' +
@@ -97,6 +118,8 @@
       '        </div>' +
       '        <label class="check"><input type="checkbox" id="lk-showmean" checked> Mean arrow + "Mean = … (SD = …)"</label>' +
       '        <label class="check"><input type="checkbox" id="lk-showcounts"> Count labels on bars</label>' +
+      '        <label class="field">Font' +
+      '          <select id="lk-font"><option value="Candara" selected>Candara</option><option value="Corbel">Corbel</option><option value="Arial">Arial</option><option value="Georgia">Georgia</option><option value="Calibri">Calibri</option></select></label>' +
       '        <div class="row">' +
       '          <label class="field">Y max <span class="sub">(0 = auto)</span><input type="number" id="lk-ymax" min="0" value="0"></label>' +
       '          <label class="field">Image size' +
@@ -200,7 +223,22 @@
       if (raw.length < 2) { $('lk-fileinfo').innerHTML = '<span class="file-warn">No data rows.</span>'; return; }
       state.raw = raw;
       state.fileName = name;
-      state.headerRow = detectVarNameRow(raw[0], raw[1]);
+      var bestScore = -1, best = 0, scoresL = [];
+      for (var ri = 0; ri < Math.min(4, raw.length); ri++) {
+        var sc = 0;
+        raw[ri].forEach(function (c) {
+          var s = String(c).trim();
+          if (/ImportId/.test(s)) { sc -= 3; return; }
+          if (/^[A-Za-z][\w .()-]{0,28}$/.test(s)) sc++;
+          if (s.length > 60) sc -= 2;
+        });
+        scoresL.push(sc);
+        if (sc > bestScore) bestScore = sc;
+      }
+      for (var rj = 0; rj < scoresL.length; rj++) {
+        if (scoresL[rj] >= 0.9 * bestScore) { best = rj; break; }
+      }
+      state.headerRow = best;
       var hr = state.headerRow;
       state.headers = raw[hr].map(function (h, i) { return String(h || 'column ' + (i + 1)).trim(); });
       state.qtexts = hr === 1 ? raw[0].map(String) : state.headers.slice();
@@ -219,6 +257,7 @@
         return /cluster/i.test(h) || /which cluster/i.test(state.qtexts[i] || '');
       });
       state.includeValues = null;
+      state.override = null;
 
       // auto-find: prefer the numeric quantselfesteem, else any self-esteem item
       var col = state.headers.findIndex(function (h) { return /quant.*esteem/i.test(h); });
@@ -232,6 +271,7 @@
       $('lk-col').value = String(state.col);
       $('lk-filtercol').innerHTML = '<option value="-1">- no filter -</option>' + opts;
       $('lk-filtercol').value = String(state.filterCol);
+      $('lk-clusterblock').style.display = '';
       buildFilterValues();
 
       $('lk-fileinfo').innerHTML = '<span class="file-info">✓ ' + escapeHtml(name) + ' · ' + state.rows.length + ' responses</span>';
@@ -250,23 +290,87 @@
         uniq.set(v, (uniq.get(v) || 0) + 1);
       });
       if (uniq.size > 40) { box.innerHTML = '<div class="small-note">⚠ too many values.</div>'; state.includeValues = null; return; }
-      if (state.includeValues === null) state.includeValues = new Set(uniq.keys());
+
+      // cluster-picker doctrine: default to NONE unless exactly one unique value
+      if (state.includeValues === null) {
+        if (uniq.size === 1) {
+          state.includeValues = new Set(uniq.keys());
+        } else {
+          state.includeValues = new Set();
+        }
+      }
+
+      var btnRow = document.createElement('div');
+      btnRow.className = 'row';
+      btnRow.style.marginBottom = '4px';
+      var selAll = document.createElement('button');
+      selAll.className = 'fixed';
+      selAll.textContent = 'Select all';
+      var clrAll = document.createElement('button');
+      clrAll.className = 'fixed';
+      clrAll.textContent = 'Clear all';
+      btnRow.appendChild(selAll);
+      btnRow.appendChild(clrAll);
+      box.appendChild(btnRow);
+
       var list = document.createElement('div');
       list.className = 'value-list';
+
+      function refreshLabels() {
+        Array.prototype.forEach.call(list.querySelectorAll('label'), function (lab) {
+          var inp = lab.querySelector('input');
+          var v2 = inp.getAttribute('data-v');
+          var on = state.includeValues.has(v2);
+          inp.checked = on;
+          lab.className = on ? 'on' : '';
+        });
+      }
+
       Array.from(uniq.keys()).sort().forEach(function (v) {
         var lab = document.createElement('label');
         var on = state.includeValues.has(v);
         lab.className = on ? 'on' : '';
-        lab.innerHTML = '<input type="checkbox" ' + (on ? 'checked' : '') + '> ' +
+        lab.innerHTML = '<input type="checkbox" data-v="' + escapeHtml(v) + '" ' + (on ? 'checked' : '') + '> ' +
           (v === '' ? '(blank)' : escapeHtml(v)) + ' <span class="cnt">' + uniq.get(v) + '</span>';
         lab.querySelector('input').addEventListener('change', function (e) {
           if (e.target.checked) state.includeValues.add(v); else state.includeValues.delete(v);
           lab.className = e.target.checked ? 'on' : '';
+          state.override = null;
           scheduleRender();
         });
         list.appendChild(lab);
       });
       box.appendChild(list);
+
+      var note = document.createElement('div');
+      note.className = 'small-note';
+      note.style.marginTop = '4px';
+      box.appendChild(note);
+
+      function updateNote() {
+        note.textContent = (state.includeValues && state.includeValues.size === 0 && uniq.size > 1)
+          ? 'tick your cluster(s) to continue' : '';
+      }
+      updateNote();
+
+      selAll.addEventListener('click', function () {
+        state.includeValues = new Set(uniq.keys());
+        state.override = null;
+        refreshLabels();
+        updateNote();
+        scheduleRender();
+      });
+      clrAll.addEventListener('click', function () {
+        state.includeValues = new Set();
+        state.override = null;
+        refreshLabels();
+        updateNote();
+        scheduleRender();
+      });
+
+      Array.prototype.forEach.call(list.querySelectorAll('input'), function (inp) {
+        inp.addEventListener('change', updateNote);
+      });
     }
 
     function includedRows() {
@@ -275,6 +379,58 @@
         var v = String(r[state.filterCol] === undefined ? '' : r[state.filterCol]).trim();
         return state.includeValues.has(v);
       });
+    }
+
+    /* ---------- editable numbers (same pattern as the culture extractor) ---------- */
+
+    function extractData() {
+      state._skipped = 0;
+      if (!state.rows.length || state.col < 0) return [];
+      var vals = includedRows().map(function (r) { return r[state.col]; });
+      var res = countScale(vals, state.K, state.anchors);
+      state._skipped = res.skipped;
+      if (!res.nums.length) return [];
+      var out = [];
+      for (var i = 0; i < state.K; i++) out.push([String(i + 1), res.counts[i]]);
+      return out;
+    }
+
+    function currentData() {
+      if (state.override) return state.override.filter(function (d) { return d[0] !== '' && isFinite(d[1]); });
+      return extractData();
+    }
+
+    function buildNums(data) {
+      var box = $('lk-nums');
+      box.innerHTML = '';
+      data.forEach(function (d, i) {
+        var row = document.createElement('div');
+        row.className = 'row';
+        row.innerHTML = '<input type="text" value="' + escapeHtml(d[0]) + '" style="flex:2;min-width:0">' +
+          '<input type="number" step="any" value="' + d[1] + '" style="flex:1;min-width:0">' +
+          '<button class="fixed" data-del="' + i + '" title="remove">x</button>';
+        box.appendChild(row);
+      });
+      Array.prototype.forEach.call(box.querySelectorAll('input'), function (inp) {
+        inp.addEventListener('input', function () { state.override = readNums(); scheduleRender(); });
+      });
+      Array.prototype.forEach.call(box.querySelectorAll('button[data-del]'), function (btn) {
+        btn.addEventListener('click', function () {
+          state.override = readNums();
+          state.override.splice(+btn.getAttribute('data-del'), 1);
+          buildNums(state.override);
+          scheduleRender();
+        });
+      });
+    }
+
+    function readNums() {
+      var out = [];
+      Array.prototype.forEach.call($('lk-nums').querySelectorAll('.row'), function (row) {
+        var ins = row.querySelectorAll('input');
+        out.push([ins[0].value.trim(), parseFloat(ins[1].value)]);
+      });
+      return out;
     }
 
     /* ---------- anchors editor ---------- */
@@ -298,6 +454,7 @@
           '<input type="text" value="' + escapeHtml(a) + '">';
         row.querySelector('input').addEventListener('input', function (e) {
           state.anchors[i] = e.target.value;
+          state.override = null;     // anchors feed extraction, so re-extract
           scheduleRender();
         });
         box.appendChild(row);
@@ -323,14 +480,53 @@
     }
 
     function render() {
-      if (!state.rows.length || state.col < 0) return;
-      var vals = includedRows().map(function (r) { return r[state.col]; });
-      var res = countScale(vals, state.K, state.anchors);
-      if (!res.nums.length) {
-        $('lk-status').textContent = 'no usable responses in that column';
+      var data = currentData();
+      var noTicks = state.filterCol >= 0 && state.includeValues !== null && state.includeValues.size === 0;
+      if (!data.length) {
+        canvas.style.display = 'none';
+        var em = $('lk-empty');
+        em.textContent = noTicks ? 'tick your cluster(s) above to continue' : 'output displayed HERE';
+        em.style.display = '';
+        $('lk-png').disabled = true;
+        $('lk-ppt').disabled = true;
+        $('lk-status').textContent = (!noTicks && state.rows.length && state.col >= 0)
+          ? 'no usable responses in that column' : '';
         return;
       }
-      var m = mean(res.nums), sd = sdSample(res.nums);
+      if (!state.override) buildNums(data);
+
+      // counts per scale point + weighted mean/SD from the numeric labels
+      var counts = [], i0;
+      for (i0 = 0; i0 < state.K; i0++) counts.push(0);
+      var n = 0, sum = 0;
+      data.forEach(function (p) {
+        var lv = parseFloat(p[0]);
+        if (!isFinite(lv) || !isFinite(p[1]) || p[1] <= 0) return;
+        var k = Math.round(lv);
+        if (k < 1 || k > state.K) return;
+        counts[k - 1] += p[1];
+        n += p[1];
+        sum += lv * p[1];
+      });
+      if (!n) {
+        canvas.style.display = 'none';
+        var em2 = $('lk-empty');
+        em2.textContent = 'output displayed HERE';
+        em2.style.display = '';
+        $('lk-png').disabled = true;
+        $('lk-ppt').disabled = true;
+        $('lk-status').textContent = 'no usable numbers on the 1-' + state.K + ' scale';
+        return;
+      }
+      var m = sum / n, vsum = 0;
+      data.forEach(function (p) {
+        var lv = parseFloat(p[0]);
+        if (!isFinite(lv) || !isFinite(p[1]) || p[1] <= 0) return;
+        var k = Math.round(lv);
+        if (k < 1 || k > state.K) return;
+        vsum += p[1] * (lv - m) * (lv - m);
+      });
+      var sd = n > 1 ? Math.sqrt(vsum / (n - 1)) : NaN;
 
       var d = state.dims.split('x');
       var W = parseInt(d[0], 10), H = parseInt(d[1], 10);
@@ -343,11 +539,10 @@
 
       var mL = 0.075 * W, mR = 0.03 * W, mT = 0.16 * H, mB = 0.22 * H;
       var plotW = W - mL - mR, plotH = H - mT - mB;
-      var yMax = state.yMax > 0 ? state.yMax : Math.max(5, Math.ceil(Math.max.apply(null, res.counts) / 5) * 5 + 5);
+      var yMax = state.yMax > 0 ? state.yMax : Math.max(5, Math.ceil(Math.max.apply(null, counts) / 5) * 5 + 5);
       var step = yMax > 20 ? 5 : yMax > 10 ? 2 : 1;
 
-      var fBody = 'Candara, "Gill Sans", Calibri, sans-serif';
-      var fHead = 'Corbel, "Segoe UI", Calibri, sans-serif';
+      var fBody = state.fontFamily + ', Candara, "Gill Sans", sans-serif';
       var axisPx = Math.round(0.032 * H);
 
       // y axis + ticks (light, like the slide)
@@ -370,7 +565,7 @@
       var slot = plotW / state.K;
       var barW = slot * 0.55;
       ctx.fillStyle = state.barColor;
-      res.counts.forEach(function (cnt, i) {
+      counts.forEach(function (cnt, i) {
         var x = mL + slot * i + (slot - barW) / 2;
         var h = plotH * cnt / yMax;
         ctx.fillRect(x, mT + plotH - h, barW, h);
@@ -423,21 +618,22 @@
         ctx.lineTo(mx + 0.012 * W, botY - 0.045 * H);
         ctx.closePath();
         ctx.fill();
+        // mean text: bold, blue, in the chosen font
         ctx.fillStyle = state.textBlue;
-        ctx.font = '700 ' + Math.round(0.052 * H) + 'px ' + fHead;
+        ctx.font = '700 ' + Math.round(0.052 * H) + 'px ' + fBody;
         ctx.textAlign = 'center';
         ctx.textBaseline = 'bottom';
         ctx.fillText('Mean = ' + m.toFixed(2), mx, topY - 0.005 * H);
-        ctx.font = '700 ' + Math.round(0.042 * H) + 'px ' + fHead;
+        ctx.font = '700 ' + Math.round(0.042 * H) + 'px ' + fBody;
         ctx.textBaseline = 'top';
-        ctx.fillText('(SD = ' + sd.toFixed(2) + ')', mx, topY + 0.002 * H);
+        ctx.fillText('(SD = ' + (isFinite(sd) ? sd.toFixed(2) : 'NA') + ')', mx, topY + 0.002 * H);
       }
 
       $('lk-png').disabled = false;
       $('lk-ppt').disabled = false;
-      $('lk-status').textContent = 'n = ' + res.nums.length +
-        (res.skipped ? ' (' + res.skipped + ' unusable skipped)' : '') +
-        ' · mean ' + m.toFixed(2) + ' · SD ' + sd.toFixed(2) + ' · ' + W + '×' + H;
+      $('lk-status').textContent = 'n = ' + n +
+        (!state.override && state._skipped ? ' (' + state._skipped + ' unusable skipped)' : '') +
+        ' · mean ' + m.toFixed(2) + ' · SD ' + (isFinite(sd) ? sd.toFixed(2) : 'NA') + ' · ' + W + '×' + H;
     }
 
     /* ---------- events ---------- */
@@ -455,12 +651,23 @@
 
     $('lk-sheet').addEventListener('change', function (e) { useSheet(+e.target.value); });
     $('lk-filtercol').addEventListener('change', function (e) {
-      state.filterCol = +e.target.value; state.includeValues = null; buildFilterValues(); scheduleRender();
+      state.filterCol = +e.target.value; state.includeValues = null; state.override = null;
+      buildFilterValues(); scheduleRender();
     });
-    $('lk-col').addEventListener('change', function (e) { state.col = +e.target.value; scheduleRender(); });
+    $('lk-col').addEventListener('change', function (e) {
+      state.col = +e.target.value; state.override = null; scheduleRender();
+    });
+    $('lk-addnum').addEventListener('click', function () {
+      state.override = readNums();
+      state.override.push(['New', 0]);
+      buildNums(state.override);
+      scheduleRender();
+    });
+    $('lk-renum').addEventListener('click', function () { state.override = null; scheduleRender(); });
     $('lk-k').addEventListener('change', function (e) {
       state.K = +e.target.value;
       state.anchors = defaultAnchorsFor(state.K);
+      state.override = null;
       renderAnchors(); scheduleRender();
     });
     $('lk-barcolor').addEventListener('input', function (e) { state.barColor = e.target.value; scheduleRender(); });
@@ -469,6 +676,7 @@
     $('lk-showmean').addEventListener('change', function (e) { state.showMean = e.target.checked; scheduleRender(); });
     $('lk-showcounts').addEventListener('change', function (e) { state.showCounts = e.target.checked; scheduleRender(); });
     $('lk-ymax').addEventListener('change', function (e) { state.yMax = Math.max(0, +e.target.value || 0); scheduleRender(); });
+    $('lk-font').addEventListener('change', function (e) { state.fontFamily = e.target.value; scheduleRender(); });
     $('lk-dims').addEventListener('change', function (e) { state.dims = e.target.value; scheduleRender(); });
 
     // demo answers shaped like the slide (0/1/8/7/14/25/7 across 1..7)

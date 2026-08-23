@@ -115,10 +115,10 @@
   // Word tokenizer matching tidytext::unnest_tokens defaults: lowercase,
   // punctuation stripped, numbers kept, intra-word apostrophes kept
   // ("don't", "friday's"). Curly apostrophes are normalized first (improves
-  // on R, which counted friday's and friday’s separately).
+  // on R, which counted friday's and friday's separately).
   function tokenize(text, opts) {
     opts = opts || {};
-    var t = String(text === null || text === undefined ? '' : text).replace(/[’‘]/g, "'");
+    var t = String(text === null || text === undefined ? '' : text).replace(/['']/g, "'");
     if (opts.lowercase !== false) t = t.toLowerCase();
     var m = t.match(/[\p{L}\p{N}]+(?:'[\p{L}\p{N}]+)*/gu) || [];
     var out = [];
@@ -191,9 +191,26 @@
     return list;
   }
 
+  // applyTransform: 'linear' is the default (hardcoded); kept for completeness.
   function applyTransform(list, kind) {
     var f = kind === 'sqrt' ? Math.sqrt : (kind === 'log' ? function (x) { return Math.log(x + 1); } : function (x) { return x; });
     return list.map(function (d) { return [d[0], f(d[1])]; });
+  }
+
+  // Merge added-word overrides into a sorted count list.
+  // overrides: plain object {word: count}. Overridden words replace their computed
+  // count (or append as new if not already in the list). New words with count > 0
+  // are appended. The result is re-sorted desc by count.
+  function applyAddedWords(list, overrides) {
+    var keys = Object.keys(overrides);
+    if (!keys.length) return list;
+    var out = list.filter(function (d) { return overrides[d[0]] === undefined; });
+    keys.forEach(function (w) {
+      var n = overrides[w];
+      if (n > 0) out.push([w, n]);
+    });
+    out.sort(function (a, b) { return b[1] - a[1] || a[0].localeCompare(b[0]); });
+    return out;
   }
 
   // Deterministic PRNG so preview, shuffle and reload are reproducible.
@@ -259,10 +276,11 @@
       headers: [], rows: [], fileName: null, strippedNote: '',
       col1: -1, col2: -1, mode: 'tokens',
       filterCol: -1, includeValues: null,     // null = include all
-      useStopwords: true, customStopText: '', manualRemoved: new Set(),
+      useStopwords: true, manualRemoved: new Set(),
+      addedWords: {},                          // word -> count overrides/additions
       minCount: 1, maxWords: 300, lowercase: true, stripNumbers: false,
       palette: 'blues', customDark: '#08306B', customLight: '#E3F2FD',
-      size: 1.0, contrast: 'linear', rotate: 30, rotDir: 'both',
+      size: 1.0, rotate: 30, rotDir: 'both',
       ellipticity: 0.65, shape: 'circle', gridSize: 0,
       font: 'sans-serif', bg: 'white', dims: '2600x1674',
       seed: 20260821
@@ -282,6 +300,11 @@
       '        <div id="wc-fileinfo"></div>' +
       '        <label class="field" id="wc-sheetrow" style="display:none">Sheet' +
       '          <select id="wc-sheet"></select></label>' +
+      '        <div class="clusterblock" id="wc-clusterblock" style="display:none">' +
+      '          <div class="clusterlabel">Select cluster(s)</div>' +
+      '          <label class="field">Cluster column<select id="wc-filtercol"></select></label>' +
+      '          <div id="wc-filtervals"></div>' +
+      '        </div>' +
       '        <div class="row"><button id="wc-sample" class="fixed">🎲 Demo data</button></div>' +
       '      </div>' +
       '    </details>' +
@@ -298,10 +321,6 @@
       '            <option value="tokens">Split responses into words (sentences → words)</option>' +
       '            <option value="whole">Count whole responses (one-word answers)</option>' +
       '          </select></label>' +
-      '        <label class="field">Filter people <span class="sub">(optional, e.g. a clusters column)</span>' +
-      '          <select id="wc-filtercol"></select></label>' +
-      '        <div id="wc-filtervals"></div>' +
-      '        <div class="small-note" id="wc-rowcount"></div>' +
       '      </div>' +
       '    </details>' +
 
@@ -313,8 +332,6 @@
       '          <label class="check fixed"><input type="checkbox" id="wc-lower" checked> Lowercase</label>' +
       '          <label class="check fixed"><input type="checkbox" id="wc-nonum"> Drop numbers</label>' +
       '        </div>' +
-      '        <label class="field">Also remove these words <span class="sub">(comma or space separated)</span>' +
-      '          <textarea id="wc-customstop" placeholder="e.g. class, cbs, lead"></textarea></label>' +
       '        <div class="row">' +
       '          <label class="field">Min. count<input type="number" id="wc-mincount" min="1" value="1"></label>' +
       '          <label class="field">Max words<input type="number" id="wc-maxwords" min="10" value="300"></label>' +
@@ -326,6 +343,17 @@
       '        <div class="word-list" id="wc-words"></div>' +
       '        <div class="small-note">Click ✕ on a word to remove it from the cloud. Removed words show below; click to restore.</div>' +
       '        <div class="word-list" id="wc-removed" style="display:none"></div>' +
+      '        <div style="margin-top:6px">' +
+      '          <div class="row" style="align-items:center;gap:6px;flex-wrap:wrap">' +
+      '            <input type="text" id="wc-addword" placeholder="add a word…" style="flex:2;min-width:80px">' +
+      '            <input type="number" id="wc-addcount" placeholder="count" min="1" style="flex:1;min-width:60px">' +
+      '            <button id="wc-addbtn" class="fixed">+ Add</button>' +
+      '          </div>' +
+      '        </div>' +
+      '        <details id="wc-editcounts" style="margin-top:6px">' +
+      '          <summary style="font-size:0.82em;cursor:pointer;color:var(--accent)">Edit word counts (top 30)</summary>' +
+      '          <div id="wc-editlist" style="margin-top:4px"></div>' +
+      '        </details>' +
       '      </div>' +
       '    </details>' +
 
@@ -339,12 +367,6 @@
       '          <span class="small-note">dark = frequent → light = rare</span></div>' +
       '        <div class="slider-field"><div class="top">Overall word size <output id="wc-size-o">1.0×</output></div>' +
       '          <input type="range" id="wc-size" min="0.3" max="3" step="0.05" value="1"></div>' +
-      '        <label class="field">Size contrast' +
-      '          <select id="wc-contrast">' +
-      '            <option value="linear">Linear: big words dominate (R default)</option>' +
-      '            <option value="sqrt">Soft (√n): evens things out</option>' +
-      '            <option value="log">Flat (log n): everything similar</option>' +
-      '          </select></label>' +
       '        <div class="slider-field"><div class="top">Vertical words <output id="wc-rot-o">30%</output></div>' +
       '          <input type="range" id="wc-rot" min="0" max="100" step="5" value="30"></div>' +
       '        <label class="field">Vertical direction' +
@@ -501,6 +523,7 @@
       state.fileName = name;
       state.strippedNote = res.stripped ? ' · Qualtrics header rows removed' : '';
       state.manualRemoved = new Set();
+      state.addedWords = {};
       state.filterCol = -1; state.includeValues = null;
 
       $('wc-fileinfo').innerHTML = '<span class="file-info">✓ ' + name + ' | ' +
@@ -544,12 +567,15 @@
       $('wc-col1').value = String(state.col1);
       $('wc-col2').value = String(state.col2);
       $('wc-filtercol').value = String(state.filterCol);
+      $('wc-clusterblock').style.display = '';
       buildFilterValues();
     }
 
     function escapeHtml(s) {
       return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
     }
+
+    /* ---------- cluster-picker doctrine ---------- */
 
     function buildFilterValues() {
       var box = $('wc-filtervals');
@@ -564,18 +590,31 @@
         box.innerHTML = '<div class="small-note">⚠ ' + uniq.size + ' different values in that column; pick a column with groups (like clusters).</div>';
         state.includeValues = null; updateRowCount(); return;
       }
-      if (state.includeValues === null) state.includeValues = new Set(uniq.keys());
 
-      var links = document.createElement('div');
-      links.className = 'mini-links';
-      links.innerHTML = '<a data-act="all">select all</a><a data-act="none">none</a>';
-      links.addEventListener('click', function (e) {
-        var act = e.target.getAttribute('data-act');
-        if (!act) return;
-        state.includeValues = act === 'all' ? new Set(uniq.keys()) : new Set();
+      // cluster-picker: default NONE selected; if exactly one unique value auto-select it
+      if (state.includeValues === null) {
+        if (uniq.size === 1) {
+          state.includeValues = new Set(uniq.keys());
+        } else {
+          state.includeValues = new Set(); // default: nothing selected
+        }
+      }
+
+      var allSelected = state.includeValues.size === uniq.size;
+      var noneSelected = state.includeValues.size === 0;
+
+      var btns = document.createElement('div');
+      btns.className = 'mini-links';
+      btns.innerHTML = '<a id="wc-flt-all">Select all</a><a id="wc-flt-none">Clear all</a>';
+      btns.querySelector('#wc-flt-all').addEventListener('click', function () {
+        state.includeValues = new Set(uniq.keys());
         buildFilterValues(); scheduleRender();
       });
-      box.appendChild(links);
+      btns.querySelector('#wc-flt-none').addEventListener('click', function () {
+        state.includeValues = new Set();
+        buildFilterValues(); scheduleRender();
+      });
+      box.appendChild(btns);
 
       var list = document.createElement('div');
       list.className = 'value-list';
@@ -588,11 +627,18 @@
         lab.querySelector('input').addEventListener('change', function (e) {
           if (e.target.checked) state.includeValues.add(v); else state.includeValues.delete(v);
           lab.className = e.target.checked ? 'on' : '';
+          notice.textContent = state.includeValues.size === 0 ? 'tick your cluster(s) above to continue' : '';
           updateRowCount(); scheduleRender();
         });
         list.appendChild(lab);
       });
       box.appendChild(list);
+
+      // show the "tick cluster" note if nothing is selected
+      if (noneSelected && uniq.size > 1) {
+        notice.textContent = 'tick your cluster(s) above to continue';
+      }
+
       updateRowCount();
     }
 
@@ -606,33 +652,66 @@
 
     function updateRowCount() {
       var inc = includedRows().length;
-      $('wc-rowcount').textContent = state.rows.length ?
-        ('Using ' + inc + ' of ' + state.rows.length + ' rows.') : '';
+      var rc = document.getElementById('wc-rowspan');
+      if (!rc && $('wc-fileinfo')) {
+        rc = document.createElement('span');
+        rc.id = 'wc-rowspan';
+        rc.className = 'small-note';
+        $('wc-fileinfo').appendChild(rc);
+      }
+      if (rc) rc.textContent = state.rows.length ? (' using ' + inc + ' of ' + state.rows.length + ' rows') : '';
     }
 
     /* ---------- word list computation ---------- */
 
-    function customStopSet() {
-      var s = new Set();
-      state.customStopText.split(/[\s,;]+/).forEach(function (w) {
-        w = w.trim().toLowerCase(); if (w) s.add(w);
-      });
-      return s;
-    }
-
     function currentList() {
       if (!state.rows.length || state.col1 < 0) return [];
+      // if cluster filter is active and nothing selected, show nothing
+      if (state.filterCol >= 0 && state.includeValues !== null && state.includeValues.size === 0) return [];
       var cols = [state.col1];
       if (state.col2 >= 0 && state.col2 !== state.col1) cols.push(state.col2);
       var counts = buildCounts(includedRows(), cols, {
         mode: state.mode, lowercase: state.lowercase, stripNumbers: state.stripNumbers
       });
-      return filterAndSort(counts, {
+      var list = filterAndSort(counts, {
         useStopwords: state.useStopwords,
-        customStop: customStopSet(),
+        customStop: new Set(),
         manualRemoved: state.manualRemoved,
         minCount: state.minCount,
         maxWords: state.maxWords
+      });
+      return applyAddedWords(list, state.addedWords);
+    }
+
+    /* ---------- edit-count list (top 30) ---------- */
+
+    function buildEditList(list) {
+      var box = $('wc-editlist');
+      box.innerHTML = '';
+      var top = list.slice(0, 30);
+      top.forEach(function (d) {
+        var row = document.createElement('div');
+        row.style.cssText = 'display:flex;align-items:center;gap:4px;margin-bottom:2px';
+        var lbl = document.createElement('span');
+        lbl.style.cssText = 'flex:2;font-size:0.82em;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
+        lbl.textContent = d[0];
+        var inp = document.createElement('input');
+        inp.type = 'number';
+        inp.min = '1';
+        inp.style.cssText = 'flex:1;min-width:50px;font-size:0.82em';
+        inp.value = String(d[1]);
+        inp.addEventListener('change', function () {
+          var v = parseInt(inp.value, 10);
+          if (v > 0) {
+            state.addedWords[d[0]] = v;
+          } else {
+            delete state.addedWords[d[0]];
+          }
+          scheduleRender();
+        });
+        row.appendChild(lbl);
+        row.appendChild(inp);
+        box.appendChild(row);
       });
     }
 
@@ -640,6 +719,16 @@
       var box = $('wc-words');
       var q = $('wc-search').value.trim().toLowerCase();
       box.innerHTML = '';
+
+      // "nothing selected" state
+      if (state.filterCol >= 0 && state.includeValues !== null && state.includeValues.size === 0) {
+        box.innerHTML = '<span class="small-note" style="padding:6px">tick your cluster(s) above to continue</span>';
+        $('wc-removed').style.display = 'none';
+        $('wc-wordhint').textContent = '';
+        buildEditList([]);
+        return;
+      }
+
       var shown = 0;
       list.forEach(function (d) {
         if (q && d[0].toLowerCase().indexOf(q) === -1) return;
@@ -650,6 +739,8 @@
         chip.innerHTML = escapeHtml(d[0]) + ' <span class="cnt">' + d[1] + '</span><button title="remove">✕</button>';
         chip.querySelector('button').addEventListener('click', function () {
           state.manualRemoved.add(d[0]);
+          // also clear any addedWords override for this word
+          delete state.addedWords[d[0]];
           refreshWords(); scheduleRender();
         });
         box.appendChild(chip);
@@ -675,6 +766,7 @@
         rbox.style.display = 'none';
       }
       $('wc-wordhint').textContent = list.length ? (list.length + ' words') : '';
+      buildEditList(list);
     }
 
     function refreshWords() { renderChips(currentList()); }
@@ -696,11 +788,23 @@
     function render() {
       var list = currentList();
       renderChips(list);
+      // cluster filter active but nothing ticked: show the notice instead
+      // of rendering (or keeping a stale cloud on screen)
+      if (state.rows.length && state.filterCol >= 0 &&
+          state.includeValues !== null && state.includeValues.size === 0) {
+        canvas.style.display = 'none';
+        var em0 = $('wc-empty');
+        em0.textContent = 'tick your cluster(s) above to continue';
+        em0.style.display = '';
+        statusEl.textContent = '';
+        return;
+      }
       if (!list.length) return;
 
       var d = state.dims.split('x');
       var W = parseInt(d[0], 10), H = parseInt(d[1], 10);
       canvas.style.display = '';
+      $('wc-empty').textContent = 'output displayed HERE';
       $('wc-empty').style.display = 'none';
       canvas.width = W; canvas.height = H;
 
@@ -709,7 +813,9 @@
       var colorMap = new Map();
       list.forEach(function (dd, i) { colorMap.set(dd[0], colors[i]); });
 
-      var tlist = applyTransform(list, state.contrast);
+      // size mapping is always linear (the R default); the old contrast
+      // select is gone, applyTransform stays for the node tests
+      var tlist = applyTransform(list, 'linear');
       var tMax = tlist.length ? tlist[0][1] : 1;
       var maxPx = state.size * 0.125 * W;
 
@@ -784,8 +890,14 @@
     });
     $('wc-sheet').addEventListener('change', function (e) { useSheet(+e.target.value); });
 
-    $('wc-col1').addEventListener('change', function (e) { state.col1 = +e.target.value; state.manualRemoved = new Set(); refreshWords(); scheduleRender(); });
-    $('wc-col2').addEventListener('change', function (e) { state.col2 = +e.target.value; refreshWords(); scheduleRender(); });
+    $('wc-col1').addEventListener('change', function (e) {
+      state.col1 = +e.target.value; state.manualRemoved = new Set(); state.addedWords = {};
+      refreshWords(); scheduleRender();
+    });
+    $('wc-col2').addEventListener('change', function (e) {
+      state.col2 = +e.target.value; state.addedWords = {};
+      refreshWords(); scheduleRender();
+    });
     $('wc-mode').addEventListener('change', function (e) { state.mode = e.target.value; refreshWords(); scheduleRender(); });
     $('wc-filtercol').addEventListener('change', function (e) {
       state.filterCol = +e.target.value; state.includeValues = null; buildFilterValues(); scheduleRender();
@@ -794,11 +906,23 @@
     $('wc-stop').addEventListener('change', function (e) { state.useStopwords = e.target.checked; scheduleRender(); });
     $('wc-lower').addEventListener('change', function (e) { state.lowercase = e.target.checked; scheduleRender(); });
     $('wc-nonum').addEventListener('change', function (e) { state.stripNumbers = e.target.checked; scheduleRender(); });
-    $('wc-customstop').addEventListener('input', function (e) { state.customStopText = e.target.value; scheduleRender(); });
     $('wc-mincount').addEventListener('change', function (e) { state.minCount = Math.max(1, +e.target.value || 1); scheduleRender(); });
     $('wc-maxwords').addEventListener('change', function (e) { state.maxWords = Math.max(10, +e.target.value || 300); scheduleRender(); });
     $('wc-search').addEventListener('input', refreshWords);
     $('wc-resetremoved').addEventListener('click', function () { state.manualRemoved = new Set(); refreshWords(); scheduleRender(); });
+
+    // add-a-word
+    $('wc-addbtn').addEventListener('click', function () {
+      var w = $('wc-addword').value.trim();
+      var n = parseInt($('wc-addcount').value, 10);
+      if (!w || !(n > 0)) return;
+      state.addedWords[w] = n;
+      // if it was in manualRemoved, restore it
+      state.manualRemoved.delete(w);
+      $('wc-addword').value = '';
+      $('wc-addcount').value = '';
+      refreshWords(); scheduleRender();
+    });
 
     $('wc-cdark').addEventListener('input', function (e) { state.customDark = e.target.value; state.palette = 'custom'; buildPaletteRow(); scheduleRender(); });
     $('wc-clight').addEventListener('input', function (e) { state.customLight = e.target.value; state.palette = 'custom'; buildPaletteRow(); scheduleRender(); });
@@ -815,7 +939,6 @@
     bindSlider('wc-ell', 'wc-ell-o', 'ellipticity', function (v) { return v.toFixed(2); });
     bindSlider('wc-grid', 'wc-grid-o', 'gridSize', function (v) { return v === 0 ? 'auto' : v + ' px'; });
 
-    $('wc-contrast').addEventListener('change', function (e) { state.contrast = e.target.value; scheduleRender(); });
     $('wc-rotdir').addEventListener('change', function (e) { state.rotDir = e.target.value; scheduleRender(); });
     $('wc-shape').addEventListener('change', function (e) { state.shape = e.target.value; scheduleRender(); });
     $('wc-font').addEventListener('change', function (e) { state.font = e.target.value; scheduleRender(); });
@@ -871,6 +994,7 @@
       buildCounts: buildCounts,
       filterAndSort: filterAndSort,
       applyTransform: applyTransform,
+      applyAddedWords: applyAddedWords,
       mulberry32: mulberry32,
       SAMPLE_CSV: SAMPLE_CSV
     };

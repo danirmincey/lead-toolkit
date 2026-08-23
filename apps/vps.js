@@ -111,25 +111,34 @@
       '        <input type="file" id="vp-file" accept=".csv,.tsv,.txt,.xlsx,.xlsm,.xltx" style="display:none">' +
       '        <div id="vp-fileinfo"></div>' +
       '        <label class="field" id="vp-sheetrow" style="display:none">Sheet<select id="vp-sheet"></select></label>' +
+      '        <div class="clusterblock" id="vp-filterblock" style="display:none">' +
+      '          <div class="clusterlabel">Select cluster(s)</div>' +
+      '          <label class="field">Cluster column<select id="vp-filtercol"></select></label>' +
+      '          <div id="vp-filtervals"></div>' +
+      '        </div>' +
+      '        <div class="row"><button id="vp-sample" class="fixed">🎲 Demo data</button></div>' +
+      '      </div>' +
+      '    </details>' +
+
+      '    <details class="step" open>' +
+      '      <summary><span class="n">2</span> Names</summary>' +
+      '      <div class="body">' +
       '        <div id="vp-cols" style="display:none">' +
       '          <div class="row">' +
       '            <label class="field">Name column<select id="vp-namecol"></select></label>' +
       '            <label class="field">+ second<select id="vp-namecol2"></select></label>' +
       '          </div>' +
-      '          <label class="field">Filter people<select id="vp-filtercol"></select></label>' +
-      '          <div id="vp-filtervals"></div>' +
       '        </div>' +
       '        <div class="row">' +
       '          <input type="text" id="vp-addname" placeholder="add a name by hand…">' +
       '          <button id="vp-addbtn" class="fixed">＋</button>' +
       '        </div>' +
-      '        <div class="row"><button id="vp-sample" class="fixed">🎲 Demo data</button></div>' +
       '        <div class="small-note">Click a name then its new cell, or drag it. ✕ unassigns.</div>' +
       '      </div>' +
       '    </details>' +
 
       '    <details class="step disabled" open>' +
-      '      <summary><span class="n">2</span> Roles & rooms</summary>' +
+      '      <summary><span class="n">3</span> Roles & rooms</summary>' +
       '      <div class="body">' +
       '        <div id="vp-roles"></div>' +
       '        <div class="small-note">Rooms (per group, top to bottom). Edit names/counts; leftover groups get breakouts automatically.</div>' +
@@ -140,7 +149,7 @@
       '    </details>' +
 
       '    <details class="step disabled" open>' +
-      '      <summary><span class="n">3</span> Look</summary>' +
+      '      <summary><span class="n">4</span> Look</summary>' +
       '      <div class="body">' +
       '        <div class="row">' +
       '          <label class="field">Header fill<input type="color" id="vp-headfill" value="#1F3864"></label>' +
@@ -246,6 +255,7 @@
       state.filterCol = -1; state.includeValues = null;
       $('vp-fileinfo').innerHTML = '<span class="file-info">✓ ' + escapeHtml(name) + ' · ' + state.rows.length + ' rows</span>';
       $('vp-cols').style.display = '';
+      $('vp-filterblock').style.display = '';
 
       var first = state.headers.findIndex(function (h) { return /first/i.test(h); });
       var last = state.headers.findIndex(function (h) { return /last/i.test(h); });
@@ -275,23 +285,81 @@
         uniq.set(v, (uniq.get(v) || 0) + 1);
       });
       if (uniq.size > 40) { state.includeValues = null; return; }
-      if (state.includeValues === null) state.includeValues = new Set(uniq.keys());
+      // cluster-picker doctrine: default to NONE unless exactly one unique value
+      if (state.includeValues === null) {
+        if (uniq.size === 1) {
+          state.includeValues = new Set(uniq.keys());
+        } else {
+          state.includeValues = new Set();
+        }
+      }
+
+      var btnRow = document.createElement('div');
+      btnRow.className = 'row';
+      btnRow.style.marginBottom = '4px';
+      var selAll = document.createElement('button');
+      selAll.className = 'fixed';
+      selAll.textContent = 'Select all';
+      var clrAll = document.createElement('button');
+      clrAll.className = 'fixed';
+      clrAll.textContent = 'Clear all';
+      btnRow.appendChild(selAll);
+      btnRow.appendChild(clrAll);
+      box.appendChild(btnRow);
+
       var list = document.createElement('div');
       list.className = 'value-list';
+
+      function refreshLabels() {
+        Array.prototype.forEach.call(list.querySelectorAll('label'), function (lab) {
+          var inp = lab.querySelector('input');
+          var v2 = inp.getAttribute('data-v');
+          var on = state.includeValues.has(v2);
+          inp.checked = on;
+          lab.className = on ? 'on' : '';
+        });
+      }
+
       Array.from(uniq.keys()).sort().forEach(function (v) {
         var lab = document.createElement('label');
         var on = state.includeValues.has(v);
         lab.className = on ? 'on' : '';
-        lab.innerHTML = '<input type="checkbox" ' + (on ? 'checked' : '') + '> ' +
+        lab.innerHTML = '<input type="checkbox" data-v="' + escapeHtml(v) + '" ' + (on ? 'checked' : '') + '> ' +
           (v === '' ? '(blank)' : escapeHtml(v)) + ' <span class="cnt">' + uniq.get(v) + '</span>';
         lab.querySelector('input').addEventListener('change', function (e) {
           if (e.target.checked) state.includeValues.add(v); else state.includeValues.delete(v);
           lab.className = e.target.checked ? 'on' : '';
+          updateNote();
           rebuildPeople();
         });
         list.appendChild(lab);
       });
       box.appendChild(list);
+
+      var note = document.createElement('div');
+      note.id = 'vp-clusternote';
+      note.className = 'small-note';
+      note.style.marginTop = '4px';
+      box.appendChild(note);
+
+      function updateNote() {
+        note.textContent = (state.includeValues && state.includeValues.size === 0 && uniq.size > 1)
+          ? 'tick your cluster(s) to continue' : '';
+      }
+      updateNote();
+
+      selAll.addEventListener('click', function () {
+        state.includeValues = new Set(uniq.keys());
+        refreshLabels();
+        updateNote();
+        rebuildPeople();
+      });
+      clrAll.addEventListener('click', function () {
+        state.includeValues = new Set();
+        refreshLabels();
+        updateNote();
+        rebuildPeople();
+      });
     }
 
     function rebuildPeople() {
@@ -523,7 +591,8 @@
       var rooms = currentRooms();
       var roomIdx = roomOfGroups(rooms);
       var CW = 2560, CH = 1440, margin = 50;
-      var nameSize = 20 * state.textScale;
+      // ~12pt on the slide: sizePx = 12 * 12700 * canvasW / 12192000 = 32 at 2560
+      var nameSize = 32 * state.textScale;
       var groupW = 90, roomW = 170;
       var roleW = (CW - 2 * margin - groupW - roomW) / 5;
       var rowH = Math.max(48, nameSize * 2.1);

@@ -20,12 +20,13 @@
     return Math.sqrt(s / (xs.length - 1));
   }
 
-  /* Stress Mindset Scale (SMS_1…SMS_8): 5-point agree labels; ODD items are
-     stress-is-deteriorating and get reverse-coded. base=1 → 1-5 scoring
-     (matches the class slide: Cluster H = 3.06); base=0 → published 0-4. */
+  /* Stress Mindset Scale (SMS_1…SMS_8): 5-point agree items; ODD items are
+     stress-is-deteriorating and get reverse-coded. FIXED published 0-4
+     scoring (Dani): labels map 0-4, numeric Qualtrics answers arrive 1-5
+     and are shifted down by one. */
   var SMS_LABELS = { 'strongly disagree': 0, 'disagree': 1, 'neither agree nor disagree': 2, 'agree': 3, 'strongly agree': 4 };
 
-  function smsScore(cells, base) {
+  function smsScore(cells) {
     var vals = [];
     for (var k = 0; k < cells.length; k++) {
       var raw = String(cells[k] === undefined || cells[k] === null ? '' : cells[k]).trim();
@@ -33,23 +34,25 @@
       if (v === undefined) {
         var n = parseFloat(raw);
         if (!isFinite(n)) return null;
-        v = n - (base === 0 ? 0 : 1);          // numeric answers assumed on the same base
+        v = n >= 1 ? n - 1 : n;                 // 1-5 numeric -> 0-4
         if (v < 0 || v > 4) return null;
       }
-      var reversed = (k % 2 === 0) ? (4 - v) : v;   // items 1,3,5,7 (0-indexed even) reverse
-      vals.push(reversed + (base === 0 ? 0 : 1));
+      var reversed = (k % 2 === 0) ? (4 - v) : v;   // items 1,3,5,7 reverse
+      vals.push(reversed);
     }
     return vals.length ? mean(vals) : null;
   }
 
   function findSmsColumns(headers) {
-    var found = [];
+    var byK = {};
     headers.forEach(function (h, i) {
-      var m = /^sms[_ ]?(\d+)$/i.exec(String(h).trim());
-      if (m) found.push({ i: i, k: +m[1] });
+      var m = /^sms[_ ]?(\d+)(_num)?$/i.exec(String(h).trim());
+      if (!m) return;
+      var k = +m[1], isNum = !!m[2];
+      if (!byK[k] || isNum) byK[k] = { i: i, k: k };   // _num wins over labels
     });
-    found.sort(function (a, b) { return a.k - b.k; });
-    return found.map(function (f) { return f.i; });
+    return Object.keys(byK).map(Number).sort(function (a, b) { return a - b; })
+      .map(function (k) { return byK[k].i; });
   }
 
   var DEFAULT_REFS = [
@@ -65,11 +68,10 @@
       raw: [], headers: [], qtexts: [], rows: [], fileName: null, _sheets: null, headerRow: 0,
       filterCol: -1, includeValues: null,
       col: -1,
-      smsCols: [],            // SMS_1…SMS_8 composite when found
-      smsBase: 1,             // 1 → 1-5 scoring (slide convention), 0 → 0-4
+      smsCols: [],            // the ticked composite items
       manualMean: null,
       clusterLabel: 'Cluster H – YOU!!',
-      min: 0, max: 5,
+      min: 0, max: 4,         // published 0-4 scale, fixed (Dani)
       refs: DEFAULT_REFS.map(function (r) { return { label: r.label, value: r.value, color: r.color }; }),
       dims: '2200x900'
     };
@@ -83,31 +85,32 @@
       '    <details class="step" open>' +
       '      <summary><span class="n">1</span> Load data <span class="hint" id="st-fhint"></span></summary>' +
       '      <div class="body">' +
-      '        <div class="dropzone" id="st-drop"><strong>DROP DATA HERE</strong><ul class="drop-spec"><li><b>Type of file:</b> CSV or Excel (.xlsx)</li><li><b>What you\'re looking for:</b> the multi-cluster nightly with SMS_1 … SMS_8 (e.g. "Ponce de Leon DM Data"); tick your cluster after loading</li></ul></div>' +
+      '        <div class="dropzone" id="st-drop"><strong>DROP DATA HERE</strong><ul class="drop-spec"><li><b>Type of file:</b> CSV or Excel (.xlsx)</li><li><b>What you\'re looking for:</b> a nightly survey with the 8 stress-mindset items (SMS_1 … SMS_8 or SMS_1_num …, labels or numbers; e.g. the Class 3 stress + self-esteem export); tick your cluster after loading</li></ul></div>' +
       '        <input type="file" id="st-file" accept=".csv,.tsv,.txt,.xlsx,.xlsm,.xltx" style="display:none">' +
       '        <div id="st-fileinfo"></div>' +
-      '        <div class="row"><button id="st-demo" class="fixed">🎲 Demo data</button></div>' +
       '        <label class="field" id="st-sheetrow" style="display:none">Sheet<select id="st-sheet"></select></label>' +
-      '        <div class="small-note" id="st-smsnote" style="display:none"></div>' +
-      '        <label class="field" id="st-scalerow" style="display:none">Scoring' +
-      '          <select id="st-scoring"><option value="1" selected>1-5 (matches the slide: H = 3.06)</option>' +
-      '          <option value="0">0-4 (published stress-mindset scale)</option></select></label>' +
-      '        <label class="field" id="st-colrow" style="display:none">…or a single stress column<select id="st-col"></select></label>' +
-      '        <label class="field" id="st-filterrow" style="display:none">Filter people<select id="st-filtercol"></select></label>' +
-      '        <div id="st-filtervals"></div>' +
-      '        <div class="row">' +
-      '          <label class="field">…or type the mean by hand<input type="number" id="st-manual" step="0.01" placeholder="e.g. 3.06"></label>' +
+      '        <div class="clusterblock" id="st-clusterblock" style="display:none">' +
+      '          <div class="clusterlabel">Select cluster(s)</div>' +
+      '          <label class="field">Cluster column<select id="st-filtercol"></select></label>' +
+      '          <div id="st-filtervals"></div>' +
       '        </div>' +
+      '        <div class="row"><button id="st-demo" class="fixed">🎲 Demo data</button></div>' +
       '      </div>' +
       '    </details>' +
 
       '    <details class="step" open>' +
-      '      <summary><span class="n">2</span> Line & references</summary>' +
+      '      <summary><span class="n">2</span> Composite & mean</summary>' +
       '      <div class="body">' +
-      '        <div class="row">' +
-      '          <label class="field">Scale min<input type="number" id="st-min" step="0.5" value="0"></label>' +
-      '          <label class="field">Scale max<input type="number" id="st-max" step="0.5" value="5"></label>' +
-      '        </div>' +
+      '        <div class="small-note">Items in the composite (auto-detected; odd items reverse-coded, published 0-4 scoring):</div>' +
+      '        <div id="st-items"></div>' +
+      '        <label class="field" id="st-colrow" style="display:none">…or a single stress column<select id="st-col"></select></label>' +
+      '        <label class="field">…or type the mean by hand<input type="number" id="st-manual" step="0.01" placeholder="e.g. 2.06"></label>' +
+      '      </div>' +
+      '    </details>' +
+
+      '    <details class="step" open>' +
+      '      <summary><span class="n">3</span> Line & references</summary>' +
+      '      <div class="body">' +
       '        <label class="field">Cluster label<input type="text" id="st-label" value="Cluster H – YOU!!"></label>' +
       '        <div class="small-note">Reference groups (label · value · color):</div>' +
       '        <div id="st-refs"></div>' +
@@ -211,10 +214,28 @@
       if (raw.length < 2) { $('st-fileinfo').innerHTML = '<span class="file-warn">No data rows.</span>'; return; }
       state.raw = raw;
       state.fileName = name;
-      state.headerRow = detectVarNameRow(raw[0], raw[1]);
+      // header row can hide below qtext + ImportId rows (e.g. the LEAD25 C3
+      // export has names in the THIRD row): pick the earliest of the first
+      // four rows that looks like short variable names
+      var bestScore = -1, best = 0, scores = [];
+      for (var ri = 0; ri < Math.min(4, raw.length); ri++) {
+        var sc = 0;
+        raw[ri].forEach(function (c) {
+          var s = String(c).trim();
+          if (/ImportId/.test(s)) { sc -= 3; return; }
+          if (/^[A-Za-z][\w .()-]{0,28}$/.test(s)) sc++;
+          if (s.length > 60) sc -= 2;
+        });
+        scores.push(sc);
+        if (sc > bestScore) bestScore = sc;
+      }
+      for (var rj = 0; rj < scores.length; rj++) {
+        if (scores[rj] >= 0.9 * bestScore) { best = rj; break; }
+      }
+      state.headerRow = best;
       var hr = state.headerRow;
       state.headers = raw[hr].map(function (h, i) { return String(h || 'column ' + (i + 1)).trim(); });
-      state.qtexts = hr === 1 ? raw[0].map(String) : state.headers.slice();
+      state.qtexts = hr > 0 ? raw[0].map(String) : state.headers.slice();
       state.rows = raw.slice(hr + 1);
       // drop Qualtrics question-text / ImportId rows lurking under the header
       // (question-text rows are long in MOST cells; data rows only in a few)
@@ -236,12 +257,7 @@
         return /stress|mindset|smm/i.test(h) || /stress/i.test(state.qtexts[i] || '');
       });
       state.col = col;
-      $('st-smsnote').style.display = state.smsCols.length >= 4 ? '' : 'none';
-      $('st-scalerow').style.display = state.smsCols.length >= 4 ? '' : 'none';
-      if (state.smsCols.length >= 4) {
-        $('st-smsnote').innerHTML = '✓ found the <b>SMS_1…SMS_' + state.smsCols.length +
-          '</b> stress-mindset items; scoring them as a composite (odd items reverse-coded).';
-      }
+      buildItemPicker();
 
       var opts = state.headers.map(function (h, i) { return '<option value="' + i + '">' + escapeHtml(h) + '</option>'; }).join('');
       $('st-col').innerHTML = '<option value="-1">- pick a column -</option>' + opts;
@@ -250,6 +266,7 @@
       $('st-filtercol').innerHTML = '<option value="-1">- no filter -</option>' + opts;
       $('st-filtercol').value = String(state.filterCol);
       $('st-filterrow').style.display = '';
+      $('st-clusterblock').style.display = '';
       buildFilterValues();
 
       $('st-fileinfo').innerHTML = '<span class="file-info">✓ ' + escapeHtml(name) + ' · ' + state.rows.length + ' responses' +
@@ -268,23 +285,81 @@
         uniq.set(v, (uniq.get(v) || 0) + 1);
       });
       if (uniq.size > 40) { state.includeValues = null; return; }
-      if (state.includeValues === null) state.includeValues = new Set(uniq.keys());
+      // cluster-picker doctrine: default to NONE unless exactly one unique value
+      if (state.includeValues === null) {
+        if (uniq.size === 1) {
+          state.includeValues = new Set(uniq.keys());
+        } else {
+          state.includeValues = new Set();
+        }
+      }
+
+      var btnRow = document.createElement('div');
+      btnRow.className = 'row';
+      btnRow.style.marginBottom = '4px';
+      var selAll = document.createElement('button');
+      selAll.className = 'fixed';
+      selAll.textContent = 'Select all';
+      var clrAll = document.createElement('button');
+      clrAll.className = 'fixed';
+      clrAll.textContent = 'Clear all';
+      btnRow.appendChild(selAll);
+      btnRow.appendChild(clrAll);
+      box.appendChild(btnRow);
+
       var list = document.createElement('div');
       list.className = 'value-list';
+
+      function refreshLabels() {
+        Array.prototype.forEach.call(list.querySelectorAll('label'), function (lab) {
+          var inp = lab.querySelector('input');
+          var v2 = inp.getAttribute('data-v');
+          var on = state.includeValues.has(v2);
+          inp.checked = on;
+          lab.className = on ? 'on' : '';
+        });
+      }
+
       Array.from(uniq.keys()).sort().forEach(function (v) {
         var lab = document.createElement('label');
         var on = state.includeValues.has(v);
         lab.className = on ? 'on' : '';
-        lab.innerHTML = '<input type="checkbox" ' + (on ? 'checked' : '') + '> ' +
+        lab.innerHTML = '<input type="checkbox" data-v="' + escapeHtml(v) + '" ' + (on ? 'checked' : '') + '> ' +
           (v === '' ? '(blank)' : escapeHtml(v)) + ' <span class="cnt">' + uniq.get(v) + '</span>';
         lab.querySelector('input').addEventListener('change', function (e) {
           if (e.target.checked) state.includeValues.add(v); else state.includeValues.delete(v);
           lab.className = e.target.checked ? 'on' : '';
+          updateNote();
           scheduleRender();
         });
         list.appendChild(lab);
       });
       box.appendChild(list);
+
+      var note = document.createElement('div');
+      note.id = 'st-clusternote';
+      note.className = 'small-note';
+      note.style.marginTop = '4px';
+      box.appendChild(note);
+
+      function updateNote() {
+        note.textContent = (state.includeValues && state.includeValues.size === 0 && uniq.size > 1)
+          ? 'tick your cluster(s) to continue' : '';
+      }
+      updateNote();
+
+      selAll.addEventListener('click', function () {
+        state.includeValues = new Set(uniq.keys());
+        refreshLabels();
+        updateNote();
+        scheduleRender();
+      });
+      clrAll.addEventListener('click', function () {
+        state.includeValues = new Set();
+        refreshLabels();
+        updateNote();
+        scheduleRender();
+      });
     }
 
     function includedRows() {
@@ -322,6 +397,41 @@
 
     /* ---------- stats + drawing ---------- */
 
+    // composite item picker: detected SMS columns pre-ticked, any
+    // stress/mindset-looking column offered
+    function buildItemPicker() {
+      var box = $('st-items');
+      if (!box) return;
+      box.innerHTML = '';
+      var candidates = [];
+      state.headers.forEach(function (h, i) {
+        var hit = /sms|stress|mindset/i.test(h) || /stress/i.test(state.qtexts[i] || '');
+        if (hit || state.smsCols.indexOf(i) !== -1) candidates.push(i);
+      });
+      if (!candidates.length) {
+        box.innerHTML = '<span class="small-note">no stress-mindset columns found in this file</span>';
+        return;
+      }
+      candidates.forEach(function (ci) {
+        var lab = document.createElement('label');
+        lab.className = 'value-list-item';
+        var on = state.smsCols.indexOf(ci) !== -1;
+        lab.innerHTML = '<input type="checkbox" ' + (on ? 'checked' : '') + '> ' + escapeHtml(state.headers[ci]);
+        lab.style.display = 'inline-block';
+        lab.style.marginRight = '10px';
+        lab.querySelector('input').addEventListener('change', function (e) {
+          if (e.target.checked) {
+            if (state.smsCols.indexOf(ci) === -1) state.smsCols.push(ci);
+          } else {
+            state.smsCols = state.smsCols.filter(function (x) { return x !== ci; });
+          }
+          state.smsCols.sort(function (a, b) { return a - b; });
+          scheduleRender();
+        });
+        box.appendChild(lab);
+      });
+    }
+
     function clusterStats() {
       if (state.manualMean !== null && isFinite(state.manualMean)) {
         return { mean: state.manualMean, n: null, sd: null, source: 'typed in by hand' };
@@ -331,14 +441,13 @@
       if (state.smsCols.length >= 4) {
         var scores = [];
         includedRows().forEach(function (r) {
-          var s = smsScore(state.smsCols.map(function (ci) { return r[ci]; }), state.smsBase);
+          var s = smsScore(state.smsCols.map(function (ci) { return r[ci]; }));
           if (s !== null) scores.push(s);
         });
         if (scores.length) {
           return {
             mean: mean(scores), n: scores.length, sd: sdSample(scores),
-            source: 'SMS_1…SMS_' + state.smsCols.length + ' composite (odd items reversed, ' +
-              (state.smsBase === 1 ? '1-5' : '0-4') + ' scoring)'
+            source: state.smsCols.length + '-item stress-mindset composite (odd items reversed, 0-4 scoring)'
           };
         }
       }
@@ -463,7 +572,7 @@
       } else {
         L.push('Cluster mean = ' + st.mean.toFixed(2) + '   (' + st.source + ')');
       }
-      L.push('Scale ' + state.min + '–' + state.max + '. References: ' +
+      L.push('References: ' +
         sorted.map(function (r) { return r.label + ' ' + r.value; }).join(' · '));
       L.push('Arrow placed at ' + st.mean.toFixed(2) + '; nudge on the slide as needed.');
       $('st-out').value = L.join('\n');
@@ -493,15 +602,6 @@
       state.col = +e.target.value;
       state.smsCols = [];              // manual column choice overrides the composite
       $('st-smsnote').style.display = 'none';
-      $('st-scalerow').style.display = 'none';
-      scheduleRender();
-    });
-    $('st-scoring').addEventListener('change', function (e) {
-      state.smsBase = +e.target.value;
-      state.min = state.smsBase === 1 ? 0 : 0;
-      state.max = state.smsBase === 1 ? 5 : 4;
-      $('st-min').value = state.min;
-      $('st-max').value = state.max;
       scheduleRender();
     });
     $('st-filtercol').addEventListener('change', function (e) {
@@ -512,8 +612,6 @@
       state.manualMean = v === '' ? null : parseFloat(v);
       scheduleRender();
     });
-    $('st-min').addEventListener('change', function (e) { state.min = parseFloat(e.target.value) || 0; scheduleRender(); });
-    $('st-max').addEventListener('change', function (e) { state.max = parseFloat(e.target.value) || 5; scheduleRender(); });
     $('st-label').addEventListener('input', function (e) { state.clusterLabel = e.target.value; scheduleRender(); });
     $('st-addref').addEventListener('click', function () {
       state.refs.push({ label: 'New group', value: 2, color: '#7030A0' });

@@ -911,8 +911,7 @@ button[id$="-demo"], #wc-sample, #dm-sample, #fc-sample, #co-sample,
 .fb-panel { left: auto; right: 16px; z-index: 96; }
 .fb-backdrop {
   position: fixed; inset: 0; z-index: 95;
-  background: rgba(20, 32, 56, .45);
-  backdrop-filter: blur(1.5px);
+  background: rgba(20, 32, 56, .32);   /* dim but LEGIBLE: no blur (Dani) */
 }
 .fb-modal {
   position: fixed; inset: 0; z-index: 120;
@@ -937,3 +936,40 @@ button[id$="-demo"], #wc-sample, #dm-sample, #fc-sample, #co-sample,
 
 /* ---- v1.15: notes lists scroll on their own; the form stays put ---- */
 .fb-lists { max-height: 32vh; overflow: auto; padding-right: 4px; }
+
+/* ---- v1.16: pareto in-app results tables ---- */
+.pf-sumwrap { display: flex; gap: 14px; flex-wrap: wrap; margin: 8px 0; }
+table.pf-sum { border-collapse: collapse; }
+table.pf-sum th {
+  background: #4472C4; color: #fff; font-family: var(--font-head);
+  font-size: 13px; padding: 6px 14px; border: 1px solid #fff;
+}
+table.pf-sum td {
+  background: #D9E2F3; color: #2E74B5; font-weight: 700;
+  font-family: var(--font-body); font-size: 16px; text-align: center;
+  padding: 6px 14px; border: 1px solid #fff;
+}
+
+
+/* ---- v1.16: your-notes expander ---- */
+.fb-minewrap summary {
+  cursor: pointer; font-family: var(--font-head); font-size: 12.5px;
+  color: var(--head-blue); padding: 4px 0;
+}
+
+/* ---- v1.19: canonical Load-data cluster block ---- */
+.clusterblock {
+  border: 1px solid var(--line, #d5dbe6);
+  border-left: 3px solid #4472C4;
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin: 10px 0 4px;
+  background: rgba(68, 114, 196, 0.05);
+}
+.clusterlabel {
+  font-family: var(--font-head);
+  color: var(--head-blue);
+  font-size: 13px;
+  font-weight: 700;
+  margin-bottom: 6px;
+}
