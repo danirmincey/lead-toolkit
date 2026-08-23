@@ -37,24 +37,25 @@
     currency: { label: 'Currency', options: ['Yen', 'Rupee', 'CAD'], show: {} }
   };
 
-  // payoff tables derived from the workbook's abhas/bussan sheets and
-  // cross-checked against the slides; India / Yen / Rupee never appear in
-  // her materials, so they default to 0 and are editable in the app
+  // payoff tables copied EXACTLY from LEAD25_C6_NegotiationWorkbook.xlsx
+  // (abhas/bussan sheets, right-hand component tables); every entry incl.
+  // India / J. courts / Yen / Rupee is the workbook's own number. Verified:
+  // all 15 frontier points and every group outcome reproduce to the digit.
   function defaultPay() {
     return {
       A: {
         price: { '0': 0, '5': 10, '10': 40 },
         excl: { Y: 20, N: 5 },
-        profit: { '10': 25, '20': 20, '30': 15, '40': 10, '50': 5 },
-        dispute: { 'India': 0, 'J. courts': 7, 'J. arbitration': 2, 'Canada': 7 },
-        currency: { 'Yen': 0, 'Rupee': 0, 'CAD': 7 }
+        profit: { '10': 50, '20': 40, '30': 20, '40': 10, '50': 5 },
+        dispute: { 'India': 0, 'J. courts': 1, 'J. arbitration': 2, 'Canada': 7 },
+        currency: { 'Yen': 0, 'Rupee': 8, 'CAD': 7 }
       },
       B: {
         price: { '0': 5, '5': 3, '10': 2 },
         excl: { Y: 0, N: 10 },
-        profit: { '10': 10, '20': 20, '30': 30, '40': 40, '50': 50 },
-        dispute: { 'India': 0, 'J. courts': 5, 'J. arbitration': 15, 'Canada': 12 },
-        currency: { 'Yen': 0, 'Rupee': 0, 'CAD': 25 }
+        profit: { '10': 5, '20': 10, '30': 20, '40': 40, '50': 50 },
+        dispute: { 'India': 0, 'J. courts': 3, 'J. arbitration': 15, 'Canada': 12 },
+        currency: { 'Yen': 25, 'Rupee': 0, 'CAD': 25 }
       }
     };
   }
@@ -173,7 +174,7 @@
       '    <details class="step" id="pf-step3" style="display:none">' +
       '      <summary><span class="n">3</span> Scoring tables <span class="hint">(advanced)</span></summary>' +
       '      <div class="body">' +
-      '        <div class="small-note">Derived from the DRRC workbook and verified against the slides. India / Yen / Rupee never appear in the materials, so they sit at 0; edit if a group picked them.</div>' +
+      '        <div class="small-note">Copied exactly from the class workbook (abhas/bussan sheets), including India, J. courts, Yen and Rupee. Every frontier point and group outcome reproduces the workbook to the digit.</div>' +
       '        <div id="pf-pay"></div>' +
       '      </div>' +
       '    </details>' +
@@ -260,6 +261,23 @@
           return window.parseXlsx(buf).then(function (sheets) {
             sheets = sheets.filter(function (s) { return s.rows.length; });
             if (!sheets.length) throw new Error('the workbook has no data');
+            // the class workbook ("input"/"final" sheets, rows like
+            // "Group 01 | names | names") is the OFFICIAL assignment:
+            // group numbers and names come from here
+            var asg = parseWorkbookAssignment(sheets);
+            if (asg) {
+              state._wbAssign = asg;
+              $('pf-fileinfo').innerHTML = '<span class="file-info">✓ ' + escapeHtml(file.name) + ' · official assignment: ' +
+                asg.groups.length + ' groups with names</span>' +
+                (state.rows.length ? '' : '<div class="small-note">now drop the "07 Negotiation Outcomes" export; numbers and names will align automatically</div>');
+              if (state.groups.length) {
+                state._align = alignGroups();
+                buildTable();
+                scheduleRender();
+                updateDisclosure();
+              }
+              return;
+            }
             state._sheets = sheets; state.fileName = file.name;
             $('pf-sheet').innerHTML = sheets.map(function (s, i) {
               return '<option value="' + i + '">' + escapeHtml(s.name || ('Sheet ' + (i + 1))) + '</option>';
@@ -274,6 +292,32 @@
       }).catch(function (err) {
         $('pf-fileinfo').innerHTML = '<span class="file-warn">Could not read file: ' + (err.message || err) + '</span>';
       });
+    }
+
+    function parseWorkbookAssignment(sheets) {
+      var best = null;
+      // prefer the sheet literally named "input", then "final"
+      var ordered = sheets.slice().sort(function (a, b) {
+        var w = function (s) { return /^input$/i.test(s.name || '') ? 0 : (/^final$/i.test(s.name || '') ? 1 : 2); };
+        return w(a) - w(b);
+      });
+      for (var si = 0; si < ordered.length; si++) {
+        var groups = [];
+        ordered[si].rows.forEach(function (r) {
+          var m = String(r && r[0] !== null && r[0] !== undefined ? r[0] : '').trim().match(/^Group\s*0*(\d+)$/i);
+          if (!m) return;
+          var a = String(r[1] === null || r[1] === undefined ? '' : r[1]).trim();
+          var b = String(r[2] === null || r[2] === undefined ? '' : r[2]).trim();
+          if ((!a || a === '0') && (!b || b === '0')) return;
+          groups.push({
+            num: parseInt(m[1], 10),
+            a: a.split(';').map(function (x) { return x.trim(); }).filter(Boolean),
+            b: b.split(';').map(function (x) { return x.trim(); }).filter(Boolean)
+          });
+        });
+        if (groups.length >= 2) { best = { groups: groups }; break; }
+      }
+      return best;
     }
 
     function findCols(headers) {
@@ -493,9 +537,86 @@
         state.clusterLabel = Array.from(state.includeClusters)[0];
         $('pf-label').value = state.clusterLabel;
       }
+      state._align = alignGroups();
       buildTable();
       scheduleRender();
       updateDisclosure();
+    }
+
+    /* ---------- Group Selector alignment ----------
+       The class's official group numbers AND names come from the Group
+       Selector | Abhas & Bussan app (same browser). It publishes its
+       assignment to localStorage; here we match imported survey rows to
+       those groups BY MEMBER NAMES, renumber to the official G#, sort,
+       and fill in the names of any group whose submission had none
+       (e.g. the anonymous no-deal response). */
+
+    function normPerson(s) {
+      return String(s).toLowerCase().replace(/[^a-z\s]/g, ' ').replace(/\s+/g, ' ').trim();
+    }
+
+    function samePerson(x, y) {
+      x = normPerson(x); y = normPerson(y);
+      if (!x || !y) return false;
+      if (x === y) return true;
+      var xt = x.split(' '), yt = y.split(' ');
+      return xt[xt.length - 1] === yt[yt.length - 1] && xt[0].slice(0, 3) === yt[0].slice(0, 3);
+    }
+
+    function splitNames(s) {
+      return String(s || '').split(';').map(function (x) { return x.trim(); }).filter(Boolean);
+    }
+
+    function alignGroups() {
+      var data = state._wbAssign || null;
+      if (!data) {
+        try { data = JSON.parse(window.localStorage.getItem('leadtk-abb-assignment') || 'null'); } catch (e) {}
+      }
+      if (!data || !data.groups || !data.groups.length || !state.groups.length) return null;
+
+      var rowNames = state.groups.map(function (g) {
+        return splitNames(g.abhas).concat(splitNames(g.bussan));
+      });
+      var pairs = [];
+      state.groups.forEach(function (g, ri) {
+        data.groups.forEach(function (a, ai) {
+          var names = (a.a || []).concat(a.b || []);
+          var score = 0;
+          names.forEach(function (n) {
+            if (rowNames[ri].some(function (m) { return samePerson(m, n); })) score++;
+          });
+          if (score >= 2) pairs.push({ ri: ri, ai: ai, score: score });
+        });
+      });
+      pairs.sort(function (x, y) { return y.score - x.score; });
+      var rowTo = {}, asgTaken = {}, matched = 0;
+      pairs.forEach(function (p) {
+        if (rowTo[p.ri] !== undefined || asgTaken[p.ai]) return;
+        rowTo[p.ri] = p.ai; asgTaken[p.ai] = true; matched++;
+      });
+      // a stale or other-cluster assignment must not scramble the table
+      if (matched < Math.ceil(state.groups.length / 2)) return null;
+
+      // exactly one unmatched row + one unmatched official group: that is
+      // the nameless submission; pair them so the NAMES come through
+      var loneRows = [], loneAsg = [];
+      state.groups.forEach(function (g, ri) { if (rowTo[ri] === undefined) loneRows.push(ri); });
+      data.groups.forEach(function (a, ai) { if (!asgTaken[ai]) loneAsg.push(ai); });
+      if (loneRows.length === 1 && loneAsg.length === 1) {
+        rowTo[loneRows[0]] = loneAsg[0];
+        matched++;
+      }
+
+      var inherited = 0;
+      state.groups.forEach(function (g, ri) {
+        var ai = rowTo[ri];
+        if (ai === undefined) return;
+        g.num = data.groups[ai].num;
+        if (!g.abhas && (data.groups[ai].a || []).length) { g.abhas = data.groups[ai].a.join('; '); inherited++; }
+        if (!g.bussan && (data.groups[ai].b || []).length) { g.bussan = data.groups[ai].b.join('; '); inherited++; }
+      });
+      state.groups.sort(function (x, y) { return (x.num || 999) - (y.num || 999); });
+      return { matched: matched, total: state.groups.length, inherited: inherited };
     }
 
     // progressive disclosure: nothing past step 1 shows until groups exist
@@ -589,7 +710,7 @@
       var html = '<div class="small-note">Group numbers come from the Group Selector, NOT submission order: edit the G# boxes (or move rows with ⭡⭣) so they match the class assignment.</div>' +
         '<table><thead><tr><th>G#</th><th></th><th>Abhas</th><th>Bussan</th>' +
         '<th>Price</th><th>Excl.</th><th>Profit</th><th>Dispute</th><th>Currency</th>' +
-        '<th>Abhas out.</th><th>Bussan out.</th><th>Joint</th><th>Pareto</th><th>No deal</th><th></th></tr></thead><tbody>';
+        '<th>Abhas out.</th><th>Bussan out.</th><th>Joint</th><th>Pareto</th><th></th></tr></thead><tbody>';
       state.groups.forEach(function (g, gi) {
         if (g.num === undefined) g.num = gi + 1;
         var a = parseFloat(g.aOut), b = parseFloat(g.bOut);
@@ -610,7 +731,6 @@
           '<td><input type="number" data-g="' + gi + '" data-k="bOut" value="' + escapeHtml(g.bOut) + '" style="width:64px"></td>' +
           '<td class="pf-joint" style="font-weight:700">' + joint + '</td>' +
           '<td class="pf-opt">' + opt + '</td>' +
-          '<td style="text-align:center"><input type="checkbox" data-nd="' + gi + '"' + (impasseRow(g) ? ' checked' : '') + ' title="no deal: keep the group, plot no data"></td>' +
           '<td><button class="fixed" data-del="' + gi + '" title="remove group">×</button></td>' +
           '</tr>';
       });
@@ -636,19 +756,6 @@
           }
           state.groups[gi][k] = inp.value;
           if (inp.type === 'number') refreshRow(gi);
-          scheduleRender();
-        });
-      });
-      Array.prototype.forEach.call(wrap.querySelectorAll('input[data-nd]'), function (cb) {
-        cb.addEventListener('change', function () {
-          var gi = +cb.getAttribute('data-nd');
-          var g = state.groups[gi];
-          g.noDeal = cb.checked;
-          if (g.noDeal) {
-            g.price = ''; g.excl = ''; g.profit = ''; g.dispute = ''; g.currency = '';
-            g.aOut = ''; g.bOut = '';
-          }
-          buildTable();
           scheduleRender();
         });
       });
@@ -827,29 +934,12 @@
         ctx.fillRect(sx(a) - 7, sy(b) - 7, 14, 14);
       });
 
-      // no-deal groups: on the plot with no data, names in grey
-      var nd = state.groups.filter(impasseRow);
-      if (nd.length) {
-        ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
-        ctx.font = '24px ' + fBody;
-        ctx.fillStyle = '#767171';
-        var ny = mT + 34;
-        ctx.fillText('No deal (no data plotted):', mL + 30, ny);
-        nd.forEach(function (g) {
-          ny += 30;
-          var who = [g.abhas, g.bussan].filter(Boolean).join(' vs ') || '(names not recorded)';
-          if (who.length > 58) who = who.slice(0, 56) + '…';
-          ctx.fillText('G' + String(g.num).padStart(2, '0') + '  ' + who, mL + 30, ny);
-        });
-      }
-
       var s = summarize(state.groups);
       renderResults(s);
       $('pf-png').disabled = false;
       $('pf-deck').disabled = false;
       $('pf-copy').disabled = false;
-      $('pf-status').textContent = s.n + ' of ' + s.total + ' groups plotted' +
-        (nd.length ? ' · ' + nd.length + ' no deal' : '') + ' · avg ' +
+      $('pf-status').textContent = s.n + ' of ' + s.total + ' groups plotted · avg ' +
         (isFinite(s.avgA) ? s.avgA.toFixed(2) : '-') + ' / ' + (isFinite(s.avgB) ? s.avgB.toFixed(2) : '-') +
         ' · reached ' + s.reached + '/' + s.total;
     }
@@ -858,7 +948,7 @@
     function renderResults(s) {
       $('pf-results').innerHTML =
         '<div class="pf-sumwrap">' +
-        '  <div class="small-note">Averages cover the ' + s.n + ' groups with a recorded deal; no-deal groups (grey rows) count in the totals below but contribute no numbers. If a figure still differs from an old class slide, the survey submission and the TA-corrected deal sheet disagree for some group: fix that row in the table.</div>' +
+        '  <div class="small-note">Averages cover the ' + s.n + ' groups with a recorded deal; grey rows count in the totals below but contribute no numbers.</div>' +
         '  <table class="pf-sum"><tr><th>Avg Abhas Outcome</th><th>Avg Bussan Outcome</th></tr>' +
         '  <tr><td>' + (isFinite(s.avgA) ? s.avgA.toFixed(2) : '-') + '</td><td>' +
              (isFinite(s.avgB) ? s.avgB.toFixed(2) : '-') + '</td></tr></table>' +
@@ -919,7 +1009,7 @@
                 tcell(g.currency || '-', fill),
                 tcell(isFinite(a) ? a : '-', fill),
                 tcell(isFinite(b) ? b : '-', fill),
-                tcell(noDeal ? 'No deal' : (isFinite(a) && isFinite(b) ? a + b : '-'), fill, { bold: true })
+                tcell(isFinite(a) && isFinite(b) ? a + b : '-', fill, { bold: true })
               ]
             });
           });

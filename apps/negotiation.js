@@ -522,6 +522,20 @@
         ' teams of ' + (sizes.length ? Math.min.apply(null, sizes) + '–' + Math.max.apply(null, sizes) : '?') + ')' +
         (over ? ' · ⚠ a manual move made a team bigger than 3' : '');
       $('ng-status').textContent = state.people.length + ' people · ' + g + ' groups · teams max 3';
+
+      // publish the assignment so the Pareto Frontier app can align its
+      // imported survey rows to THESE group numbers and names
+      try {
+        var assign = [];
+        for (var ti = 0; ti < state.teams.length; ti += 2) {
+          assign.push({
+            num: ti / 2 + 1,
+            a: (state.teams[ti] || []).map(personById).filter(Boolean).map(function (p) { return p.name; }),
+            b: (state.teams[ti + 1] || []).map(personById).filter(Boolean).map(function (p) { return p.name; })
+          });
+        }
+        if (assign.length) window.localStorage.setItem('leadtk-abb-assignment', JSON.stringify({ ts: Date.now(), groups: assign }));
+      } catch (e) { /* storage unavailable: alignment simply stays manual */ }
     }
 
     /* ---------- PPTX export ---------- */
