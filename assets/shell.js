@@ -25,7 +25,7 @@ window.LeadToolkit = (function () {
   // Home-screen placeholders (each shows in its own class section).
   var PLANNED = [];
 
-  var VERSION = '1.25';
+  var VERSION = '1.26';
 
   // Home: faculty is the TOP-LEVEL selector (Rebecca by default), then
   // sort by Class or by App type below it.
@@ -311,6 +311,66 @@ window.LeadToolkit = (function () {
     pop.style.display = 'block';
   }
 
+  // ---- Head TA gate --------------------------------------------------------
+  // The apps listed here open only after the Head TA password. It is the same
+  // gate Social Networks has always used, now owned by the shell so there is
+  // ONE implementation and ONE password. Unlocking any of them unlocks them
+  // all for that page load; reloading the site locks them again.
+  var GATE_PASSWORD = 'headta';
+  var GATED = ['extractor', 'extractorlgs', 'extractorbta', 'kidney',
+    'culture', 'pareto', 'socialnet'];
+  var gateOpen = false;
+
+  function checkGatePassword(input) {
+    return String(input || '').trim().toLowerCase() === GATE_PASSWORD;
+  }
+
+  function isLocked(app) {
+    return !!app && GATED.indexOf(app.id) !== -1 && !gateOpen;
+  }
+
+  // The lock screen, mounted in place of the app: same markup Social Networks
+  // used, so a gated app looks exactly like the gate Dani already knows.
+  function renderGate(holder, app) {
+    // route() runs again on a faculty or sort change, and a locked app is
+    // never marked mounted, so guard against redrawing the lock screen and
+    // wiping a password mid-type. Redraw only if it is genuinely gone.
+    if (holder._gated && holder.querySelector('.gate-pass')) return;
+    holder._gated = true;
+    holder.innerHTML = '' +
+      '<div class="app-title"><h2>' + escapeHtml(app.icon + ' ' + app.name) + '</h2></div>' +
+      '<div style="display:flex;align-items:center;justify-content:center;min-height:50vh">' +
+      '  <div style="text-align:center">' +
+      '    <div style="font-size:44px;margin-bottom:14px">🔒</div>' +
+      '    <div class="row" style="justify-content:center">' +
+      '      <input type="password" class="gate-pass" placeholder="password" autocomplete="off" style="max-width:220px">' +
+      '      <button class="primary gate-go">Enter</button>' +
+      '    </div>' +
+      '    <div class="small-note gate-msg" style="min-height:1.4em;margin-top:8px"></div>' +
+      '  </div>' +
+      '</div>';
+
+    var pass = holder.querySelector('.gate-pass');
+    var msg = holder.querySelector('.gate-msg');
+
+    function tryEnter() {
+      if (checkGatePassword(pass.value)) {
+        gateOpen = true;
+        holder.innerHTML = '';
+        holder._gated = false;
+        route();                       // now mounts the app for real
+      } else {
+        msg.textContent = 'nope';
+        pass.value = '';
+        pass.focus();
+      }
+    }
+
+    holder.querySelector('.gate-go').addEventListener('click', tryEnter);
+    pass.addEventListener('keydown', function (e) { if (e.key === 'Enter') tryEnter(); });
+    setTimeout(function () { pass.focus(); }, 50);
+  }
+
   function route() {
     var seg = location.hash.replace(/^#\//, '').split('/');
     var id = seg[0];
@@ -324,8 +384,14 @@ window.LeadToolkit = (function () {
     });
 
     if (target && !mounted[target.id]) {
-      mounted[target.id] = true;
-      target.mount(document.getElementById('app-' + target.id));
+      var host = document.getElementById('app-' + target.id);
+      if (isLocked(target)) {
+        renderGate(host, target);
+      } else {
+        if (host._gated) { host.innerHTML = ''; host._gated = false; }  // clear a lock screen left over from before the unlock
+        mounted[target.id] = true;
+        target.mount(host);
+      }
     }
     if (target) {
       var holder = document.getElementById('app-' + target.id);
@@ -338,8 +404,9 @@ window.LeadToolkit = (function () {
         titleBox.appendChild(chip);
       }
       // demo + reset live NEXT TO THE TITLE, not inside the apps (the apps'
-      // own demo buttons are hidden by CSS and clicked programmatically)
-      if (titleBox && !titleBox.querySelector('.title-actions')) {
+      // own demo buttons are hidden by CSS and clicked programmatically).
+      // A lock screen gets neither: the only thing on it is the lock.
+      if (titleBox && !isLocked(target) && !titleBox.querySelector('.title-actions')) {
         var act = el('span', { 'class': 'title-actions' });
         var demoBtn = holder.querySelector(
           'button[id$="-demo"], #wc-sample, #dm-sample, #fc-sample, #co-sample, #gp-sample, #ng-sample, #vp-sample, #pf-example');
@@ -369,7 +436,7 @@ window.LeadToolkit = (function () {
         act.appendChild(r);
         titleBox.appendChild(act);
       }
-      if (typeof target.onRoute === 'function') target.onRoute(sub);
+      if (typeof target.onRoute === 'function' && !isLocked(target)) target.onRoute(sub);
     }
 
     // highlight the tab whose menu holds the current app
