@@ -86,7 +86,7 @@
 
     var state = {
       headers: [], rows: [], fileName: null, _sheets: null,
-      nameCol: -1, nameCol2: -1, filterCol: -1, includeValues: null,
+      nameCol: -1, nameCol2: -1, nameStyle: 'preferred', filterCol: -1, includeValues: null,
       people: [],
       roles: ['VP HR', 'VP Finance', 'VP Operations', 'VP Sales', 'VP Marketing'],
       roomsCustom: null,        // null = auto defaults for the group count
@@ -124,6 +124,11 @@
       '      <summary><span class="n">2</span> Names</summary>' +
       '      <div class="body">' +
       '        <div id="vp-cols" style="display:none">' +
+      '          <div class="row" id="vp-nametyperow" style="display:none">' +
+      '            <label class="field">Which name<select id="vp-nametype">' +
+      '<option value="preferred">Preferred name</option><option value="first">First name</option>' +
+      '</select></label>' +
+      '          </div>' +
       '          <div class="row">' +
       '            <label class="field">Name column<select id="vp-namecol"></select></label>' +
       '            <label class="field">+ second<select id="vp-namecol2"></select></label>' +
@@ -257,11 +262,7 @@
       $('vp-cols').style.display = '';
       $('vp-filterblock').style.display = '';
 
-      var first = state.headers.findIndex(function (h) { return /first/i.test(h); });
-      var last = state.headers.findIndex(function (h) { return /last/i.test(h); });
-      var full = state.headers.findIndex(function (h) { return /name/i.test(h); });
-      if (first !== -1 && last !== -1) { state.nameCol = first; state.nameCol2 = last; }
-      else { state.nameCol = full !== -1 ? full : 0; state.nameCol2 = -1; }
+      applyNameStyle();
       state.filterCol = state.headers.findIndex(function (h) { return /cluster/i.test(h); });
 
       var opts = state.headers.map(function (h, i) { return '<option value="' + i + '">' + escapeHtml(h) + '</option>'; }).join('');
@@ -273,6 +274,30 @@
       $('vp-filtercol').value = String(state.filterCol);
       buildFilterValues();
       rebuildPeople();
+    }
+
+    /* Preferred name by default, First name if she flips the toggle.
+       The toggle row only appears when the file has both columns. */
+    function applyNameStyle(rebuild) {
+      var pick = window.leadNames.pick(state.headers, state.nameStyle);
+      state.nameCol = pick.nameCol; state.nameCol2 = pick.nameCol2;
+      $('vp-nametyperow').style.display = window.leadNames.styleApplies(pick.cols) ? '' : 'none';
+      $('vp-nametype').value = state.nameStyle;
+      // on a live toggle the column selects already exist, so re-point them;
+      // during loadRows the caller fills and sets them straight after
+      if (rebuild) {
+        $('vp-namecol').value = String(state.nameCol);
+        $('vp-namecol2').value = String(state.nameCol2);
+        rebuildPeople();
+      }
+    }
+
+    // keep the toggle honest when she picks a column by hand
+    function syncNameStyle() {
+      var c = window.leadNames.findCols(state.headers);
+      if (state.nameCol === c.preferred) state.nameStyle = 'preferred';
+      else if (state.nameCol === c.first) state.nameStyle = 'first';
+      $('vp-nametype').value = state.nameStyle;
     }
 
     function buildFilterValues() {
@@ -654,7 +679,8 @@
     drop.addEventListener('drop', function (e) { if (e.dataTransfer.files[0]) loadFile(e.dataTransfer.files[0]); });
 
     $('vp-sheet').addEventListener('change', function (e) { useSheet(+e.target.value); });
-    $('vp-namecol').addEventListener('change', function (e) { state.nameCol = +e.target.value; rebuildPeople(); });
+    $('vp-nametype').addEventListener('change', function (e) { state.nameStyle = e.target.value; applyNameStyle(true); });
+    $('vp-namecol').addEventListener('change', function (e) { state.nameCol = +e.target.value; syncNameStyle(); rebuildPeople(); });
     $('vp-namecol2').addEventListener('change', function (e) { state.nameCol2 = +e.target.value; rebuildPeople(); });
     $('vp-filtercol').addEventListener('change', function (e) {
       state.filterCol = +e.target.value; state.includeValues = null; buildFilterValues(); rebuildPeople();

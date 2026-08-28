@@ -176,7 +176,7 @@
 
     var state = {
       headers: [], rows: [], fileName: null, _sheets: null,
-      nameCol: -1, nameCol2: -1, keyCol: -1,
+      nameCol: -1, nameCol2: -1, nameStyle: 'preferred', keyCol: -1,
       filterCol: -1, includeValues: null,
       people: [],            // {id, name, key}
       rooms: class2Rooms(),
@@ -216,6 +216,11 @@
       '      <summary><span class="n">2</span> Names <span class="hint" id="gp-count2"></span></summary>' +
       '      <div class="body">' +
       '        <div id="gp-cols" style="display:none">' +
+      '          <div class="row" id="gp-nametyperow" style="display:none">' +
+      '            <label class="field">Which name<select id="gp-nametype">' +
+      '<option value="preferred">Preferred name</option><option value="first">First name</option>' +
+      '</select></label>' +
+      '          </div>' +
       '          <div class="row">' +
       '            <label class="field">Name column<select id="gp-namecol"></select></label>' +
       '            <label class="field">+ second <span class="sub">(e.g. Last)</span><select id="gp-namecol2"></select></label>' +
@@ -388,11 +393,7 @@
       $('gp-cols').style.display = '';
       $('gp-filterblock').style.display = '';
 
-      var first = state.headers.findIndex(function (h) { return /first/i.test(h); });
-      var last = state.headers.findIndex(function (h) { return /last/i.test(h); });
-      var full = state.headers.findIndex(function (h) { return /name/i.test(h); });
-      if (first !== -1 && last !== -1) { state.nameCol = first; state.nameCol2 = last; }
-      else { state.nameCol = full !== -1 ? full : 0; state.nameCol2 = -1; }
+      applyNameStyle();
       state.filterCol = state.headers.findIndex(function (h) { return /cluster/i.test(h); });
       state.keyCol = state.headers.findIndex(function (h) { return /gender|section|country|industry/i.test(h); });
 
@@ -407,6 +408,30 @@
       $('gp-filtercol').value = String(state.filterCol);
       buildFilterValues();
       rebuildPeopleFromRows();
+    }
+
+    /* Preferred name by default, First name if she flips the toggle.
+       The toggle row only appears when the file has both columns. */
+    function applyNameStyle(rebuild) {
+      var pick = window.leadNames.pick(state.headers, state.nameStyle);
+      state.nameCol = pick.nameCol; state.nameCol2 = pick.nameCol2;
+      $('gp-nametyperow').style.display = window.leadNames.styleApplies(pick.cols) ? '' : 'none';
+      $('gp-nametype').value = state.nameStyle;
+      // on a live toggle the column selects already exist, so re-point them;
+      // during loadRows the caller fills and sets them straight after
+      if (rebuild) {
+        $('gp-namecol').value = String(state.nameCol);
+        $('gp-namecol2').value = String(state.nameCol2);
+        rebuildPeopleFromRows();
+      }
+    }
+
+    // keep the toggle honest when she picks a column by hand
+    function syncNameStyle() {
+      var c = window.leadNames.findCols(state.headers);
+      if (state.nameCol === c.preferred) state.nameStyle = 'preferred';
+      else if (state.nameCol === c.first) state.nameStyle = 'first';
+      $('gp-nametype').value = state.nameStyle;
     }
 
     function buildFilterValues() {
@@ -961,7 +986,8 @@
     drop.addEventListener('drop', function (e) { if (e.dataTransfer.files[0]) loadFile(e.dataTransfer.files[0]); });
 
     $('gp-sheet').addEventListener('change', function (e) { useSheet(+e.target.value); });
-    $('gp-namecol').addEventListener('change', function (e) { state.nameCol = +e.target.value; rebuildPeopleFromRows(); });
+    $('gp-nametype').addEventListener('change', function (e) { state.nameStyle = e.target.value; applyNameStyle(true); });
+    $('gp-namecol').addEventListener('change', function (e) { state.nameCol = +e.target.value; syncNameStyle(); rebuildPeopleFromRows(); });
     $('gp-namecol2').addEventListener('change', function (e) { state.nameCol2 = +e.target.value; rebuildPeopleFromRows(); });
     $('gp-filtercol').addEventListener('change', function (e) {
       state.filterCol = +e.target.value; state.includeValues = null; buildFilterValues(); rebuildPeopleFromRows();
