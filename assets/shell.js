@@ -26,7 +26,7 @@ window.LeadToolkit = (function () {
   // Home-screen placeholders (each shows in its own class section).
   var PLANNED = [];
 
-  var VERSION = '1.28';
+  var VERSION = '1.29';
 
   // Home: faculty is the TOP-LEVEL selector (Rebecca by default), then
   // sort by Class or by App type below it.
