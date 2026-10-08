@@ -269,66 +269,24 @@ function ringGeom(k){
 
 function easeOutQuart(t){ return 1 - Math.pow(1-t,4); }
 function easeOutCubic(t){ return 1 - Math.pow(1-t,3); }
-function linear(t){ return t; }
-/* zero velocity AND zero acceleration at both ends: the only way to start
-   and stop a creep without the eye reading it as a jerk */
-function smootherstep(t){ return t*t*t*(t*(6*t - 15) + 10); }
 
 /* ---------------------------------------------------------------------
-   HOW A REAL PRIZE WHEEL STOPS
-   A wheel never runs backwards. It slows, and the flapper rides over the
-   pegs; near the end it can barely clear one, so it hangs on a peg,
-   trembles between the two wedges either side of it, then tips forward
-   into one. That forward tip is a fraction of a wedge, never a whole one.
-   So: motion is MONOTONIC in the spin direction, the resting point is
-   somewhere random inside the wedge rather than dead centre, and the
-   drama is a hesitation at a peg, not a reversal.
+   HOW THE WHEEL STOPS
+   It slows down and it lands. That is the whole thing.
 
-   ONE continuous move, never a chain of separate animations. Chaining was
-   what made it jerk: each new leg started at its own full speed from a dead
-   stop. Here the whole spin is a single easing curve whose velocity is zero
-   on both sides of the hang and at the finish, so there is no instant where
-   speed changes abruptly.
+   Earlier versions hung on a peg near the end, trembled, then tipped
+   forward into the winning wedge. Dani rejected the jerk twice, then
+   rejected the hesitation itself: it added the better part of two seconds
+   to every spin and still read as awkward on the projector. Gone.
+
+   What is left is ONE continuous easing curve from where the wheel is to
+   where it lands, so speed only ever falls and reaches zero at the finish.
+   Never chain legs here: a second leg starts at its own full speed from a
+   dead stop, which is exactly what made the first two builds jerk.
    --------------------------------------------------------------------- */
-function spinStages(fromRot, centreRot, seg, dir, baseDur, n, dramatic, rnd){
+function spinStages(fromRot, centreRot, baseDur, rnd){
   rnd = rnd || Math.random;
-  // never park dead centre: sit anywhere in the middle 70% of the wedge
-  var jit = (rnd()*0.70 - 0.35) * seg;
-  var finalRot = centreRot + jit;
-
-  // a hesitation only reads when the wedges are small enough to have pegs
-  // close together; with a handful of names left it just looks odd
-  if (!dramatic || n < 6){
-    return [{ to: finalRot, dur: baseDur + rnd()*500, ease: easeOutQuart }];
-  }
-
-  // where the wheel hangs: just past the peg, so the picker is still on the
-  // wedge BEFORE the winner (0.56 > half a wedge, so genuinely the other side)
-  var holdRot = centreRot - dir*seg*0.56;
-  var total = finalRot - fromRot;
-  var f = (holdRot - fromRot)/total;            // share of the trip done before the hang
-  if (!(f > 0 && f < 1)) return [{ to: finalRot, dur: baseDur + rnd()*500, ease: easeOutQuart }];
-
-  var t1 = 0.60, t2 = 0.80;                     // spin down · hang · tip over
-  // The tug is deliberately TINY: under a degree, one slow rock. Big enough
-  // to read as the wheel straining against the peg, far too small to look
-  // like it is running backwards. Capped in absolute terms so a nearly empty
-  // wheel with huge wedges does not swing wildly.
-  var amp = Math.min(seg*0.011, 0.007), cyc = 1.0;
-
-  var ease = function(t){
-    if (t <= t1) return f * easeOutQuart(t/t1);           // ends at zero speed
-    if (t <= t2) return f;                                // hangs, still
-    return f + (1-f)*smootherstep((t-t2)/(1-t2));         // leaves and arrives at zero speed
-  };
-  // rocks against the peg. sin squared means the rock itself fades in and
-  // out rather than switching on, so it never snaps either.
-  var wob = function(t){
-    if (t <= t1 || t >= t2) return 0;
-    var u = (t-t1)/(t2-t1), env = Math.sin(Math.PI*u);
-    return Math.sin(2*Math.PI*cyc*u) * amp * env * env;
-  };
-  return [{ to: finalRot, dur: baseDur + 1700 + rnd()*500, ease: ease, wob: wob }];
+  return [{ to: centreRot, dur: baseDur + rnd()*300, ease: easeOutQuart }];
 }
 
 var PURE = { isStaff:isStaff, personKey:personKey,
@@ -1079,7 +1037,7 @@ function refreshRings(){
     rings.push({
       people: part, rIn: geom.rings[i].rIn, rOut: geom.rings[i].rOut,
       rot: (keep[i] !== undefined ? keep[i] : Math.random()*6.283), dir: i % 2 ? -1 : 1,
-      dur: 3400 + i*1250, turns: 6 + i,
+      dur: 2200 + i*700, turns: 4 + i,
       anim: null, pick: -1, flash: 0
     });
   });
@@ -1109,20 +1067,16 @@ function spin(){
   shuffleT = performance.now();
   var now = performance.now();
 
-  // at most one ring per spin hangs on a peg, and it is the last to settle
-  var dramaIdx = (Math.random() < 0.45) ? rings.length - 1 : -1;
-
   rings.forEach(function(r, i){
     var idx = pickOne(r.people);
     r.pick = idx;
     winners.push(r.people[idx]);
-    var n = r.people.length, seg = 2*Math.PI/n;
+    var n = r.people.length;
     var centreRot = targetRotation(r.rot, n, idx, r.turns + Math.floor(Math.random()*2), r.dir);
     r.anim = {
-      st: spinStages(r.rot, centreRot, seg, r.dir, r.dur, n, i === dramaIdx),
-      i: 0, from: r.rot, t0: now + i*110
+      st: spinStages(r.rot, centreRot, r.dur),
+      i: 0, from: r.rot, t0: now + i*90
     };
-    r.wob = 0;
     hubSlots[i] = { text:'', locked:false };
   });
   syncPanel();
@@ -1196,20 +1150,16 @@ function draw(now){
       var s = a.st[a.i], t = (now - a.t0)/s.dur;
       if (t <= 0) return;                               // staggered start
       if (t >= 1){
-        r.rot = s.to; r.wob = 0;
+        r.rot = s.to;
         a.i++;
         if (a.i >= a.st.length){
           r.anim = null; r.flash = now; justFixed.push(i);
         } else { a.from = s.to; a.t0 = now; }
       } else {
         r.rot = a.from + (s.to - a.from)*s.ease(t);
-        // the tug is drawn only, it never moves where the wheel actually lands
-        r.wob = s.wob ? s.wob(t) : 0;
       }
     } else if (phase === 'idle'){
-      r.rot += r.dir*0.0015; r.wob = 0;
-    } else {
-      r.wob = 0;
+      r.rot += r.dir*0.0015;
     }
   });
   justFixed.forEach(function(i){
@@ -1259,7 +1209,7 @@ function drawLight(x, y, s, shape, fill, ang){
 function drawRing(r, R, G, now){
   var n = r.people.length; if (!n) return;
   var rIn = R*r.rIn, rOut = R*r.rOut, rMid = (rIn+rOut)/2, th = rOut-rIn;
-  var seg = 6.2832/n, arcW = seg*rMid, rot = r.rot + (r.wob || 0);
+  var seg = 6.2832/n, arcW = seg*rMid, rot = r.rot;
   // face slightly smaller than the band so the name under it stays big
   var face = Math.max(14, Math.min(th*0.62, arcW*0.84));
   for (var k=0;k<n;k++){
