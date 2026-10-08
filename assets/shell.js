@@ -19,13 +19,14 @@ window.LeadToolkit = (function () {
     'Class 3 - Influence and Persuasion',
     'Class 4 - Collective Intelligence',
     'Class 5 - Culture',
-    'Class 6 - Negotiations'
+    'Class 6 - Negotiations',
+    'Class 7 - Leading Inclusively'
   ];
 
   // Home-screen placeholders (each shows in its own class section).
   var PLANNED = [];
 
-  var VERSION = '1.27';
+  var VERSION = '1.28';
 
   // Home: faculty is the TOP-LEVEL selector (Rebecca by default), then
   // sort by Class or by App type below it.
